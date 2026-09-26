@@ -934,7 +934,14 @@ case $host_os in
     AC_SUBST(SECURITY_LIBS,"-framework Security -framework CoreFoundation")
     AC_SUBST(SYSTEMCONFIGURATION_LIBS,"-framework SystemConfiguration")
 
-    WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+    WINELOADER_LDFLAGS="-Wl,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+
+    case $HOST_ARCH in
+      dnl On arm64 the kernel requires the 4 GB page zero and rejects a smaller
+      dnl one at exec time, and nothing below 4 GB can be mapped anyway.
+      aarch64) wine_use_preloader=no ;;
+      *) WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000 $WINELOADER_LDFLAGS" ;;
+    esac
 
     case $HOST_ARCH in
       i386) wine_use_preloader=yes ;;
