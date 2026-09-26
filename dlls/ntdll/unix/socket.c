@@ -93,7 +93,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(winsock);
 
-#define u64_to_user_ptr(u) ((void *)(uintptr_t)(u))
+/* 32-bit callers store their addresses zero-extended; their address space may sit at a window */
+#define u64_to_user_ptr(u) ((u) == (ULONG)(u) ? wow64_ptr( (ULONG)(u) ) : (void *)(uintptr_t)(u))
 
 union unix_sockaddr
 {
