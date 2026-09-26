@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #ifdef HAVE_SYS_PARAM_H
 # include <sys/param.h>
 #endif
@@ -754,6 +755,9 @@ static void setup_raise_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec
     void *stack_ptr = (void *)(SP_sig(sigcontext) & ~15);
     NTSTATUS status;
 
+    TRACE( "code=%x addr=%p info=%p/%p pc=%p sp=%p\n", rec->ExceptionCode, rec->ExceptionAddress,
+           (void *)rec->ExceptionInformation[0], (void *)rec->ExceptionInformation[1],
+           (void *)PC_sig(sigcontext), (void *)SP_sig(sigcontext) );
     status = send_debug_event( rec, context, TRUE, TRUE );
     if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
     {
@@ -889,6 +893,7 @@ NTSTATUS call_user_exception_dispatcher( EXCEPTION_RECORD *rec, CONTEXT *context
     struct exc_stack_layout *stack;
     NTSTATUS status = NtSetContextThread( GetCurrentThread(), context );
 
+    TRACE( "code=%x addr=%p pc=%p sp=%p\n", rec->ExceptionCode, rec->ExceptionAddress, (void *)context->Pc, (void *)context->Sp );
     if (status) return status;
     stack = (struct exc_stack_layout *)(context->Sp & ~15) - 1;
     memmove( &stack->context, context, sizeof(*context) );
@@ -1102,6 +1107,14 @@ static BOOL handle_syscall_fault( ucontext_t *context, EXCEPTION_RECORD *rec )
     TRACE( "code=%x flags=%x addr=%p pc=%p tid=%04x\n",
            rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress,
            (void *)PC_sig(context), GetCurrentThreadId() );
+    if (TRACE_ON(seh))
+    {
+        Dl_info info;
+        if (dladdr( (void *)PC_sig(context), &info ) && info.dli_sname)
+            TRACE( " pc in %s+%#lx (%s)\n", info.dli_sname, (unsigned long)(PC_sig(context) - (ULONG_PTR)info.dli_saddr), info.dli_fname );
+        if (dladdr( (void *)LR_sig(context), &info ) && info.dli_sname)
+            TRACE( " lr in %s+%#lx (%s)\n", info.dli_sname, (unsigned long)(LR_sig(context) - (ULONG_PTR)info.dli_saddr), info.dli_fname );
+    }
     for (i = 0; i < rec->NumberParameters; i++)
         TRACE( " info[%d]=%016lx\n", i, rec->ExceptionInformation[i] );
 
