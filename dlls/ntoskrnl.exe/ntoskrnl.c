@@ -4703,6 +4703,9 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, LPVOID reserved )
 #if defined(__i386__) || defined(__x86_64__)
         handler = RtlAddVectoredExceptionHandler( TRUE, vectored_handler );
 #endif
+#ifdef __x86_64__
+        wine_user_shared_data = (const BYTE *)__wine_get_user_shared_data();
+#endif
         KeQueryTickCount( &count );  /* initialize the global KeTickCount */
         NtBuildNumber = NtCurrentTeb()->Peb->OSBuildNumber;
         ntoskrnl_heap = HeapCreate( HEAP_CREATE_ENABLE_EXECUTE, 0, 0 );

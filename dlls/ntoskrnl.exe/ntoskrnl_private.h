@@ -122,4 +122,9 @@ struct wine_device
     DEVICE_OBJECT device_obj;
     DEVICE_RELATIONS *children;
 };
+
+#ifdef __x86_64__
+/* the KUSER_SHARED_DATA page as user mode sees it, where ntdll placed it */
+extern const BYTE *wine_user_shared_data;
+#endif
 #endif
