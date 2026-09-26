@@ -2715,6 +2715,37 @@ static SIZE_T get_committed_size( struct file_view *view, void *base, size_t max
  * Decommit some pages of a given view.
  * virtual_mutex must be held by caller.
  */
+/***********************************************************************
+ *           zero_decommitted_part
+ *
+ * Zero the pages [start, end) inside one host page that stays mapped because
+ * other pages in it are still committed, so that they read as zero when they
+ * are committed again, as a fresh mapping would. Private memory only.
+ * virtual_mutex must be held by caller.
+ */
+static void zero_decommitted_part( struct file_view *view, char *start, char *end )
+{
+    char *host_page = ROUND_ADDR( start, host_page_mask );
+
+    if (start >= end || !is_view_valloc( view )) return;
+#ifdef HAVE_JIT_POOL
+    if (is_jit_pool( host_page ))
+    {
+        if (ntdll_get_thread_data()->jit_writable) memset( start, 0, end - start );
+        else
+        {
+            pthread_jit_write_protect_np( 0 );
+            memset( start, 0, end - start );
+            pthread_jit_write_protect_np( 1 );
+        }
+        return;
+    }
+#endif
+    if (mprotect( host_page, host_page_size, PROT_READ | PROT_WRITE )) return;
+    memset( start, 0, end - start );
+    mprotect_range( host_page, host_page_size, 0, 0 );
+}
+
 static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size )
 {
     char *host_end, *host_start = (char *)ROUND_SIZE( 0, base, host_page_mask );
@@ -2729,6 +2760,13 @@ static NTSTATUS decommit_pages( struct file_view *view, char *base, size_t size 
     if (host_start < host_end) anon_mmap_fixed( host_start, host_end - host_start, PROT_NONE, 0 );
     set_page_vprot_bits( base, size, 0, VPROT_COMMITTED );
     if (host_start < host_end) kernel_writewatch_register_range( view, host_start, host_end - host_start );
+    /* pages that share a host page with committed ones are only marked */
+    if (host_start > host_end) zero_decommitted_part( view, base, base + size );
+    else
+    {
+        zero_decommitted_part( view, base, host_start );
+        zero_decommitted_part( view, host_end, base + size );
+    }
     return STATUS_SUCCESS;
 }
 
