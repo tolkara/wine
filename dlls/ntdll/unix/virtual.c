@@ -5198,6 +5198,14 @@ void virtual_set_force_exec( BOOL enable )
     struct file_view *view;
     sigset_t sigset;
 
+#if !defined(__i386__) && !defined(__x86_64__)
+    /* The 32-bit code this is asked for runs in an emulator, which checks the
+     * page protections itself; the host never executes it. Forcing PROT_EXEC
+     * also makes macOS refuse shared file mappings, which would then be read
+     * in as private copies that no longer see the other side's writes. */
+    return;
+#endif
+
     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
     if (!force_exec_prot != !enable)  /* change all existing views */
     {
