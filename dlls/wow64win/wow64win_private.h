@@ -51,12 +51,14 @@ typedef struct
 /* On a host that has nothing below 4 GB the 32-bit address space lives at
  * a 4 GB-aligned window (docs/WINDOWS.md in Tolkara): a 32-bit address is
  * the low half of its host address. Widening goes through here. Nothing is
- * mapped in the lowest 64k of the window, so values below that are atoms or
- * resource ids passed in pointer fields and are kept as they are. */
+ * mapped in the lowest and the highest 64k of the window, so values there are
+ * atoms, resource ids, window procedure handles or -1 passed in pointer
+ * fields and are kept as they are. */
 extern ULONG_PTR wow64_window;
 static inline void *wow64_ptr( ULONG addr )
 {
-    return addr >= 0x10000 ? (void *)((ULONG_PTR)addr | wow64_window) : ULongToHandle( addr );
+    if (addr < 0x10000 || addr >= 0xffff0000) return ULongToHandle( addr );
+    return (void *)((ULONG_PTR)addr | wow64_window);
 }
 #undef ULongToPtr
 #define ULongToPtr(ul) wow64_ptr(ul)
