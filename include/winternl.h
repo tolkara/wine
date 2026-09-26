@@ -2393,6 +2393,7 @@ typedef enum _MEMORY_INFORMATION_CLASS {
     MemoryWineUnixWow64Funcs,
 #endif
     MemoryFexStatsShm = 2000,
+    MemoryWineJitWriteOffset,
 } MEMORY_INFORMATION_CLASS;
 
 typedef struct _MEMORY_SECTION_NAME

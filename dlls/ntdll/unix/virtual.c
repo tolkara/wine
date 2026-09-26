@@ -288,6 +288,26 @@ static inline BOOL is_jit_pool( const void *addr )
 {
     return (const char *)addr >= jit_pool_base && (const char *)addr < jit_pool_end;
 }
+
+/* An aliased pool is memory the host prepared for execution, whose executable
+ * view must never become writable (an iPadOS app): it is written through a
+ * writable alias at a constant offset, and only pages that are data for good
+ * take other protections. */
+static ptrdiff_t jit_pool_write_offset;
+
+static inline BOOL is_jit_pool_aliased( const void *addr )
+{
+    return jit_pool_write_offset && is_jit_pool( addr );
+}
+
+/* where memory at addr is written */
+static inline void *write_address( void *addr )
+{
+    return is_jit_pool_aliased( addr ) ? (char *)addr + jit_pool_write_offset : addr;
+}
+#else
+static inline BOOL is_jit_pool_aliased( const void *addr ) { return FALSE; }
+static inline void *write_address( void *addr ) { return addr; }
 #endif
 
 #ifdef _WIN64
@@ -328,6 +348,9 @@ static BOOL exclude_wow64_window( void **start, void **end, int top_down )
 static inline int host_prot( const void *addr, int prot )
 {
 #ifdef HAVE_JIT_POOL
+    /* an aliased pool stays executable; a page there that loses that is data for good */
+    if (is_jit_pool_aliased( addr ))
+        return ((prot & PROT_EXEC) || prot == PROT_NONE) ? PROT_READ | PROT_EXEC : prot;
     /* Outside the JIT pool the kernel refuses memory that is writable and
      * executable at once. Pages are filled while writable and run once they
      * are protected read-execute, which is how images are loaded. */
@@ -343,6 +366,13 @@ void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
     assert( !(size & host_page_mask) );
 
 #ifdef HAVE_JIT_POOL
+    if (is_jit_pool_aliased( start ))
+    {
+        /* a fresh mapping reads as zero */
+        memset( write_address( start ), 0, size );
+        if (mprotect( start, size, host_prot( start, prot ))) WARN( "cannot set protection %#x on JIT pool pages %p-%p\n", prot, start, (char *)start + size );
+        return start;
+    }
     if (is_jit_pool( start ))
     {
         /* The pool stays mapped and its pages are recycled in place. Once a
@@ -2159,6 +2189,7 @@ static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image 
 static inline int mprotect_exec( void *base, size_t size, int unix_prot )
 {
 #ifdef HAVE_JIT_POOL
+    if (is_jit_pool_aliased( base )) return mprotect( base, size, host_prot( base, unix_prot ));
     if (is_jit_pool( base ))
     {
         /* Pages that have been writable and executable keep that protection;
@@ -2563,6 +2594,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                 TRACE( "got mem in JIT pool %p-%p\n", ptr, (char *)ptr + size );
                 goto done;
             }
+            if (jit_pool_write_offset)
+            {
+                /* nothing else can execute on such a host */
+                ERR( "JIT pool %p-%p has no room for %p bytes\n", jit_pool_base, jit_pool_end, (void *)size );
+                return STATUS_NO_MEMORY;
+            }
             WARN( "JIT pool %p-%p has no room for %p bytes; the memory will not execute\n",
                   jit_pool_base, jit_pool_end, (void *)size );
             vprot &= ~VPROT_JIT;
@@ -2693,6 +2730,11 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (is_jit_pool_aliased( map_addr ))
+    {
+        pread( fd, write_address( map_addr ), size, offset );
+        return STATUS_SUCCESS;
+    }
     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
     pread( fd, map_addr, size, offset );
     return STATUS_SUCCESS;
@@ -2762,6 +2804,11 @@ static void zero_decommitted_part( struct file_view *view, char *start, char *en
 
     if (start >= end || !is_view_valloc( view )) return;
 #ifdef HAVE_JIT_POOL
+    if (is_jit_pool_aliased( host_page ))
+    {
+        memset( write_address( start ), 0, end - start );
+        return;
+    }
     if (is_jit_pool( host_page ))
     {
         if (ntdll_get_thread_data()->jit_writable) memset( start, 0, end - start );
@@ -3372,6 +3419,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
     struct stat st;
     char *header_end;
     char *ptr = view->base;
+    char *wptr = write_address( ptr );  /* where the image is written */
     SIZE_T header_size, header_map_size, total_size = view->size;
     SIZE_T align_mask = max( image_info->alignment - 1, page_mask );
     INT_PTR delta;
@@ -3383,14 +3431,16 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
     fstat( fd, &st );
     header_size = min( image_info->header_size, st.st_size );
     header_map_size = min( image_info->header_map_size, ROUND_SIZE( 0, st.st_size, host_page_mask ));
-    if ((status = map_pe_header( view->base, header_size, header_map_size, fd, &removable )))
+    /* nothing is mapped over an aliased pool; the image is read in */
+    if (wptr != ptr) removable = TRUE;
+    if ((status = map_pe_header( wptr, header_size, header_map_size, fd, &removable )))
         return status;
 
     status = STATUS_INVALID_IMAGE_FORMAT;  /* generic error */
     dos = (IMAGE_DOS_HEADER *)ptr;
     nt = (IMAGE_NT_HEADERS *)(ptr + dos->e_lfanew);
     header_end = ptr + ROUND_SIZE( 0, header_size, align_mask );
-    memset( ptr + header_size, 0, header_end - (ptr + header_size) );
+    memset( wptr + header_size, 0, header_end - (ptr + header_size) );
     if ((char *)(nt + 1) > header_end) return status;
     sec = IMAGE_FIRST_SECTION( nt );
     if ((char *)(sec + nt->FileHeader.NumberOfSections) > header_end) return status;
@@ -3518,7 +3568,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
             TRACE_(module)("clearing %p - %p\n",
                            ptr + sec[i].VirtualAddress + file_size,
                            ptr + sec[i].VirtualAddress + end );
-            memset( ptr + sec[i].VirtualAddress + file_size, 0, end - file_size );
+            memset( wptr + sec[i].VirtualAddress + file_size, 0, end - file_size );
         }
     }
 
@@ -3551,9 +3601,9 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
                         (ULONG_PTR)image_info->base, (ULONG_PTR)image_info->map_addr, ptr );
 
         if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
-            ((IMAGE_NT_HEADERS64 *)nt)->OptionalHeader.ImageBase = image_info->map_addr;
+            ((IMAGE_NT_HEADERS64 *)write_address( nt ))->OptionalHeader.ImageBase = image_info->map_addr;
         else
-            ((IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.ImageBase = image_info->map_addr;
+            ((IMAGE_NT_HEADERS32 *)write_address( nt ))->OptionalHeader.ImageBase = image_info->map_addr;
 
         if ((dir = get_data_dir( nt, total_size, IMAGE_DIRECTORY_ENTRY_BASERELOC )))
         {
@@ -3561,7 +3611,7 @@ static NTSTATUS map_image_into_view( struct file_view *view, const WCHAR *filena
             IMAGE_BASE_RELOCATION *end = (IMAGE_BASE_RELOCATION *)((char *)rel + dir->Size);
 
             while (rel && rel < end - 1 && rel->SizeOfBlock && rel->VirtualAddress < total_size)
-                rel = process_relocation_block( ptr + rel->VirtualAddress, rel, delta );
+                rel = process_relocation_block( wptr + rel->VirtualAddress, rel, delta );
         }
     }
 
@@ -3664,6 +3714,19 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
 
     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
     if (!limit_high) limit_high = (ULONG_PTR)user_space_limit;
+
+#if defined(HAVE_JIT_POOL) && defined(__aarch64__)
+    /* Native code runs only from an aliased pool, wherever it lies. The image
+     * is relocated there and then, through the alias: relocating it later
+     * would make its pages writable, and they would never execute again. */
+    if (jit_pool_write_offset && image_info->machine == IMAGE_FILE_MACHINE_ARM64)
+    {
+        NTSTATUS status = map_view( view_ret, NULL, size, top_down ? MEM_TOP_DOWN : 0, vprot | VPROT_JIT,
+                                    0, 0, granularity_mask );
+        if (!status) image_info->map_addr = wine_server_client_ptr( (*view_ret)->base );
+        return status;
+    }
+#endif
 
     /* first try the specified base */
 
@@ -3971,10 +4034,53 @@ static void *alloc_virtual_heap( SIZE_T size )
 static void jit_pool_init(void)
 {
     const char *env = getenv( "WINEJITPOOL" );
-    unsigned long start, end;
+    unsigned long start, end, alias;
     size_t size = 0x100000000;  /* 4 GB */
     void *ptr;
 
+    if (env && sscanf( env, "%lx-%lx@%lx", &start, &end, &alias ) == 3)
+    {
+        /* memory the host prepared, and its writable alias */
+        if ((start | end | alias) & host_page_mask || end <= start ||
+            is_beyond_limit( (void *)start, end - start, user_space_limit ))
+        {
+            ERR( "invalid JIT pool %s\n", env );
+            return;
+        }
+        jit_pool_base = (char *)start;
+        jit_pool_end = (char *)end;
+        jit_pool_write_offset = alias - start;
+        TRACE( "using the host's JIT pool %p-%p written at %p\n", jit_pool_base, jit_pool_end, (void *)alias );
+        return;
+    }
+#ifdef __APPLE__
+    if (env && !strncmp( env, "dual:", 5 ))
+    {
+        /* such a pool made here, for trying on a host that does not need one */
+        mach_vm_address_t alias_address = 0;
+        vm_prot_t cur, max;
+
+        size = (size_t)strtoul( env + 5, NULL, 0 ) << 20;
+        if (!size || (ptr = mmap( NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0 )) == MAP_FAILED)
+        {
+            ERR( "cannot map a JIT pool of %p bytes\n", (void *)size );
+            return;
+        }
+        if (mach_vm_remap( mach_task_self(), &alias_address, size, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
+                           (mach_vm_address_t)ptr, FALSE, &cur, &max, VM_INHERIT_NONE ) ||
+            mprotect( (void *)alias_address, size, PROT_READ | PROT_WRITE ))
+        {
+            ERR( "cannot alias the JIT pool\n" );
+            munmap( ptr, size );
+            return;
+        }
+        jit_pool_base = ptr;
+        jit_pool_end = (char *)ptr + size;
+        jit_pool_write_offset = (char *)alias_address - (char *)ptr;
+        TRACE( "JIT pool %p-%p written at %p\n", jit_pool_base, jit_pool_end, (void *)alias_address );
+        return;
+    }
+#endif
     if (env && sscanf( env, "%lx-%lx", &start, &end ) == 2)
     {
         jit_pool_base = ROUND_ADDR( start + host_page_mask, host_page_mask );
@@ -4913,6 +5019,12 @@ int virtual_handle_jit_fault( ULONG_PTR err, void *addr )
     int ret = 0;
 
     if (!is_jit_pool( page )) return 0;
+    if (jit_pool_write_offset)
+    {
+        /* nothing makes these pages writable; writes go through the alias */
+        if (err == EXCEPTION_WRITE_FAULT) ERR( "write to the executable view of the JIT pool at %p\n", addr );
+        return 0;
+    }
     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
     vprot = get_host_page_vprot( page );
     if (is_vprot_exec_write( vprot ) && (vprot & VPROT_COMMITTED) && !(vprot & VPROT_GUARD))
@@ -6511,6 +6623,17 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
                 return status;
             }
             return STATUS_INVALID_HANDLE;
+
+        case MemoryWineJitWriteOffset:
+            if (len != sizeof(ULONG_PTR)) return STATUS_INFO_LENGTH_MISMATCH;
+            if (process != NtCurrentProcess()) return STATUS_NOT_SUPPORTED;
+#ifdef HAVE_JIT_POOL
+            *(ULONG_PTR *)buffer = jit_pool_write_offset;
+#else
+            *(ULONG_PTR *)buffer = 0;
+#endif
+            if (res_len) *res_len = sizeof(ULONG_PTR);
+            return STATUS_SUCCESS;
 
         case MemoryFexStatsShm:
 #if defined(linux) && defined(__aarch64__)
