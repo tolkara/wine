@@ -178,6 +178,20 @@ struct callback_stack_layout
 C_ASSERT( offsetof(struct callback_stack_layout, sp) == 0x20 );
 C_ASSERT( sizeof(struct callback_stack_layout) == 0x30 );
 
+#ifdef __APPLE__
+/* The kernel does not preserve x18 across context switches or signal returns,
+ * so nothing here may rely on it, not even between two instructions. The TEB
+ * is kept in pthread TSD slot 767 (0x17f8 from TPIDRRO_EL0; see
+ * init_syscall_frame); PE code reads it from there (winnt.h NtCurrentTeb) and
+ * the dispatchers load it from there into a register they own. */
+#define TEB_TSD_OFFSET 0x17f8
+#define __ASM_LOAD_SYSCALL_FRAME_X10 "mrs x10, tpidrro_el0\n\tldr x10, [x10, #0x17f8]\n\tldr x10, [x10, #0x378]\n\t"
+#define __ASM_LOAD_TEB_X24 "mrs x24, tpidrro_el0\n\tldr x24, [x24, #0x17f8]\n\t"
+#else
+#define __ASM_LOAD_SYSCALL_FRAME_X10 "ldr x10, [x18, #0x378]\n\t"
+#define __ASM_LOAD_TEB_X24 "mov x24, x18\n\t"
+#endif
+
 struct syscall_frame
 {
     ULONG64               x[29];          /* 000 */
@@ -887,20 +901,20 @@ __ASM_GLOBAL_FUNC( call_user_mode_callback,
                    "mrs x1, fpcr\n\t"
                    "mrs x2, fpsr\n\t"
                    "bfi x1, x2, #0, #32\n\t"
-                   "ldr x2, [x18]\n\t"            /* teb->Tib.ExceptionList */
+                   "ldr x2, [x4]\n\t"             /* teb->Tib.ExceptionList */
                    "stp x1, x2, [x29, #0xb0]\n\t"
 
-                   "ldr x7, [x18, #0x378]\n\t"    /* thread_data->syscall_frame */
+                   "ldr x7, [x4, #0x378]\n\t"     /* thread_data->syscall_frame */
                    "sub x1, sp, #0x330\n\t"       /* sizeof(struct syscall_frame) */
-                   "str x1, [x18, #0x378]\n\t"    /* thread_data->syscall_frame */
+                   "str x1, [x4, #0x378]\n\t"     /* thread_data->syscall_frame */
                    "add x8, x29, #0xd0\n\t"
                    "stp x7, x8, [x1, #0x110]\n\t" /* frame->prev_frame,syscall_cfa */
-                   "ldr w11, [x18, #0x380]\n\t"   /* thread_data->syscall_trace */
+                   "ldr w11, [x4, #0x380]\n\t"    /* thread_data->syscall_trace */
                    "cbnz x11, 1f\n\t"
                    /* switch to user stack */
                    "mov sp, x0\n\t"               /* user_sp */
                    "br x3\n"
-                   "1:\tmov x19, x18\n\t"         /* teb */
+                   "1:\tmov x19, x4\n\t"          /* teb */
                    "mov x20, x0\n\t"              /* user_sp */
                    "mov x21, x3\n\t"              /* func */
                    "mov sp, x1\n\t"
@@ -1503,6 +1517,15 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, BOOL suspend, 
     struct syscall_frame *frame = thread_data->syscall_frame;
     CONTEXT *ctx, context = { CONTEXT_ALL };
     I386_CONTEXT *i386_context;
+
+#ifdef __APPLE__
+    {
+        /* this thread's TEB, where PE code and the dispatchers look for it */
+        void **tsd;
+        __asm__( "mrs %0, tpidrro_el0" : "=r" (tsd) );
+        tsd[TEB_TSD_OFFSET / sizeof(*tsd)] = teb;
+    }
+#endif
     ARM_CONTEXT *arm_context;
 
     ((struct arm64_thread_data *)(thread_data->cpu_data))->suspend_pending = FALSE;
@@ -1606,7 +1629,7 @@ __ASM_GLOBAL_FUNC( signal_start_thread,
  *           __wine_syscall_dispatcher
  */
 __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
-                   "ldr x10, [x18, #0x378]\n\t" /* thread_data->syscall_frame */
+                   __ASM_LOAD_SYSCALL_FRAME_X10 /* thread_data->syscall_frame */
                    "stp x18, x19, [x10, #0x90]\n\t"
                    "stp x20, x21, [x10, #0xa0]\n\t"
                    "stp x22, x23, [x10, #0xb0]\n\t"
@@ -1655,9 +1678,10 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
                    __ASM_CFI(".cfi_offset 26, -0x78\n\t")
                    __ASM_CFI(".cfi_offset 27, -0x70\n\t")
                    __ASM_CFI(".cfi_offset 28, -0x68\n\t")
+                   __ASM_LOAD_TEB_X24           /* teb, for the rest of the call */
                    "and x20, x8, #0xfff\n\t"    /* syscall number */
                    "ubfx x21, x8, #12, #2\n\t"  /* syscall table number */
-                   "ldr x16, [x18, #0x370]\n\t" /* thread_data->syscall_table */
+                   "ldr x16, [x24, #0x370]\n\t" /* thread_data->syscall_table */
                    "add x21, x16, x21, lsl #5\n\t"
                    "ldr x16, [x21, #16]\n\t"    /* table->ServiceLimit */
                    "cmp x20, x16\n\t"
@@ -1675,7 +1699,7 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
                    "cbnz x9, 1b\n"
                    "2:\tldr x16, [x21]\n\t"     /* table->ServiceTable */
                    "ldr x23, [x16, x20, lsl 3]\n\t"
-                   "ldr w11, [x18, #0x380]\n\t" /* thread_data->syscall_trace */
+                   "ldr w11, [x24, #0x380]\n\t" /* thread_data->syscall_trace */
                    "cbnz x11, " __ASM_LOCAL_LABEL("trace_syscall") "\n\t"
                    "blr x23\n\t"
                    "mov sp, x22\n"
@@ -1762,7 +1786,8 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
                    "b " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_return") )
 
 __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher_return,
-                   "ldr w11, [x18, #0x380]\n\t" /* thread_data->syscall_trace */
+                   __ASM_LOAD_TEB_X24           /* teb; x24 is restored from the frame below */
+                   "ldr w11, [x24, #0x380]\n\t" /* thread_data->syscall_trace */
                    "cbnz x11, " __ASM_LOCAL_LABEL("trace_syscall_ret") "\n\t"
                    "b " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_return") )
 
@@ -1771,7 +1796,7 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher_return,
  *           __wine_unix_call_dispatcher
  */
 __ASM_GLOBAL_FUNC( __wine_unix_call_dispatcher,
-                   "ldr x10, [x18, #0x378]\n\t" /* thread_data->syscall_frame */
+                   __ASM_LOAD_SYSCALL_FRAME_X10 /* thread_data->syscall_frame */
                    "stp x18, x19, [x10, #0x90]\n\t"
                    "stp x20, x21, [x10, #0xa0]\n\t"
                    "stp x22, x23, [x10, #0xb0]\n\t"

@@ -7713,6 +7713,10 @@ fi
     eval CFLAGS=\$${wine_arch}_CFLAGS
     eval LDFLAGS=\$${wine_arch}_LDFLAGS
     eval "${wine_arch}_EXTRACFLAGS=\"-D__WINE_PE_BUILD -Wall\""
+    case $host_os,$HOST_ARCH,$wine_arch in
+      darwin*,aarch64,aarch64|darwin*,aarch64,arm64ec)
+        eval "${wine_arch}_EXTRACFLAGS=\"\$${wine_arch}_EXTRACFLAGS -D__WINE_TEB_TSD_OFFSET=0x17f8\"" ;;
+    esac
 
     target=""
     set x $CC

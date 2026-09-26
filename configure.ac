@@ -439,6 +439,12 @@ do
     AS_VAR_COPY([CFLAGS],[${wine_arch}_CFLAGS])
     AS_VAR_COPY([LDFLAGS],[${wine_arch}_LDFLAGS])
     AS_VAR_SET([${wine_arch}_EXTRACFLAGS],["-D__WINE_PE_BUILD -Wall"])
+    case $host_os,$HOST_ARCH,$wine_arch in
+      dnl The kernel does not preserve x18: PE code finds the TEB in a pthread
+      dnl TSD slot instead (include/winnt.h, dlls/ntdll/unix/signal_arm64.c).
+      darwin*,aarch64,aarch64|darwin*,aarch64,arm64ec)
+        AS_VAR_APPEND([${wine_arch}_EXTRACFLAGS],[" -D__WINE_TEB_TSD_OFFSET=0x17f8"]) ;;
+    esac
 
     target=""
     set x $CC

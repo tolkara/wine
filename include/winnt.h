@@ -2478,6 +2478,17 @@ static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)
 {
     return (struct _TEB *)__readfsdword( 0x18 );
 }
+#elif (defined(__aarch64__) || defined(__arm64ec__)) && defined(__WINE_TEB_TSD_OFFSET)
+/* macOS: the kernel does not preserve x18, so the TEB lives in a pthread TSD
+ * slot reached through TPIDRRO_EL0 (dlls/ntdll/unix/signal_arm64.c). */
+#define __WINE_TEB_TSD_STR_(x) #x
+#define __WINE_TEB_TSD_STR(x) __WINE_TEB_TSD_STR_(x)
+static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)
+{
+    struct _TEB *teb;
+    __asm__( "mrs %0, tpidrro_el0\n\tldr %0, [%0, #" __WINE_TEB_TSD_STR(__WINE_TEB_TSD_OFFSET) "]" : "=r" (teb) );
+    return teb;
+}
 #elif (defined(__aarch64__) || defined(__arm64ec__)) && defined(__GNUC__)
 register struct _TEB *__wine_current_teb __asm__("x18");
 static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)

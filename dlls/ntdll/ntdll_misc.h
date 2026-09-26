@@ -104,6 +104,13 @@ extern void (FASTCALL *pBaseThreadInitThunk)(DWORD,LPTHREAD_START_ROUTINE,void *
 
 extern struct _KUSER_SHARED_DATA *user_shared_data;
 
+/* load the TEB into an arm64 register: x18 on Windows, a pthread TSD slot on macOS (see winnt.h) */
+#ifdef __WINE_TEB_TSD_OFFSET
+#define __ASM_TEB_TO(reg) "mrs " reg ", tpidrro_el0\n\tldr " reg ", [" reg ", #" __WINE_TEB_TSD_STR(__WINE_TEB_TSD_OFFSET) "]\n\t"
+#else
+#define __ASM_TEB_TO(reg) "mov " reg ", x18\n\t"
+#endif
+
 #ifdef _WIN64
 static inline TEB64 *NtCurrentTeb64(void) { return NULL; }
 #else

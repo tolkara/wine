@@ -1358,7 +1358,8 @@ __ASM_GLOBAL_FUNC( "#KiUserCallbackDispatcher",
                    ".seh_handler user_callback_handler, @except\n\t"
                    "ldr x0, [sp]\n\t"             /* args */
                    "ldp w1, w2, [sp, #0x08]\n\t"  /* len, id */
-                   "ldr x3, [x18, 0x60]\n\t"      /* peb */
+                   __ASM_TEB_TO("x3")
+                   "ldr x3, [x3, 0x60]\n\t"       /* peb */
                    "ldr x3, [x3, 0x58]\n\t"       /* peb->KernelCallbackTable */
                    "ldr x15, [x3, x2, lsl #3]\n\t"
                    "blr x15\n\t"
@@ -1873,7 +1874,8 @@ static void __attribute__((naked)) arm64x_check_call(void)
     asm( ".seh_proc \"#arm64x_check_call\"\n\t"
          ".seh_endprologue\n\t"
          /* check for EC code */
-         "ldr x16, [x18, #0x60]\n\t"        /* peb */
+         __ASM_TEB_TO("x16")
+         "ldr x16, [x16, #0x60]\n\t"        /* peb */
          "lsr x17, x11, #18\n\t"            /* dest / page_size / 64 */
          "ldr x16, [x16, #0x368]\n\t"       /* peb->EcCodeBitMap */
          "lsr x9, x11, #12\n\t"             /* dest / page_size */
@@ -2025,7 +2027,8 @@ void __attribute((naked)) RtlRaiseException( EXCEPTION_RECORD *rec )
          "ldr w2, [x1, #0x30]\n\t"     /* context->ContextFlags */
          "orr w2, w2, #0x20000000\n\t" /* CONTEXT_UNWOUND_TO_CALL */
          "str w2, [x1, #0x30]\n\t"
-         "ldr x3, [x18, #0x60]\n\t"    /* peb */
+         __ASM_TEB_TO("x3")
+         "ldr x3, [x3, #0x60]\n\t"     /* peb */
          "ldrb w2, [x3, #2]\n\t"       /* peb->BeingDebugged */
          "cbnz w2, 1f\n\t"
          "bl \"#dispatch_exception\"\n"
@@ -2134,7 +2137,8 @@ void __attribute__((naked)) DbgUiRemoteBreakin( void *arg )
          ".seh_save_fplr_x 16\n\t"
          ".seh_endprologue\n\t"
          ".seh_handler DbgUiRemoteBreakin_handler, @except\n\t"
-         "ldr x0, [x18, #0x60]\n\t"  /* NtCurrentTeb()->Peb */
+         __ASM_TEB_TO("x0")
+         "ldr x0, [x0, #0x60]\n\t"   /* NtCurrentTeb()->Peb */
          "ldrb w0, [x0, 0x02]\n\t"   /* peb->BeingDebugged */
          "cbz w0, 1f\n\t"
          "bl \"#DbgBreakPoint\"\n"
