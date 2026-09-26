@@ -823,7 +823,7 @@ unsigned int server_wait( const union select_op *select_op, data_size_t size, UI
  */
 NTSTATUS WINAPI NtContinue( CONTEXT *context, BOOLEAN alertable )
 {
-    return NtContinueEx( context, ULongToPtr(alertable) );
+    return NtContinueEx( context, (void *)(ULONG_PTR)alertable );  /* a flag, not an address */
 }
 
 

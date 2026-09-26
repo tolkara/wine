@@ -47,6 +47,13 @@ NTSYSAPI NTSTATUS ntdll_get_unix_file_name( const WCHAR *dos, char **unix_name, 
 
 NTSYSAPI void ntdll_set_exception_jmp_buf( jmp_buf jmp );
 
+/* A 32-bit address as the host sees it: the identity, except on a host whose
+ * 32-bit address space sits at a window (arm64 Darwin, see ntdll's virtual.c).
+ * Every ULongToPtr on this side widens a WoW64 pointer, so it goes through here. */
+NTSYSAPI void *ntdll_wow64_ptr( ULONG addr );
+#undef ULongToPtr
+#define ULongToPtr(ul) ntdll_wow64_ptr( (ULONG)(ul) )
+
 #define __TRY \
     do { jmp_buf __jmp; \
          int __first = 1; \

@@ -291,6 +291,16 @@ static inline BOOL is_jit_pool( const void *addr )
 #endif
 
 #ifdef _WIN64
+/***********************************************************************
+ *           ntdll_wow64_ptr
+ *
+ * ULongToPtr for the Unix side of every library, see wine/unixlib.h.
+ */
+void *ntdll_wow64_ptr( ULONG addr )
+{
+    return wow64_ptr( addr );
+}
+
 /* is the range meant for the 32-bit address space window? */
 static inline BOOL is_wow64_window_range( const void *start, const void *end )
 {
