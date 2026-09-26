@@ -90,10 +90,11 @@ static inline WOW_TEB *get_wow_teb( TEB *teb )
 
 #ifdef _WIN64
 extern char *wow64_window;
-/* host pointer for an address in the 32-bit address space, see virtual.c */
+/* host pointer for an address in the 32-bit address space, see virtual.c;
+ * values below 64k are atoms or resource ids, not addresses, and are kept */
 static inline void *wow64_ptr( ULONG addr )
 {
-    return addr ? wow64_window + addr : NULL;
+    return addr >= 0x10000 ? wow64_window + addr : ULongToHandle( addr );
 }
 #else
 #define wow64_ptr(addr) ULongToPtr(addr)

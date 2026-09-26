@@ -79,11 +79,13 @@ static inline TEB32 *NtCurrentTeb32(void)
 
 /* On a host that has nothing below 4 GB the 32-bit address space lives at
  * a 4 GB-aligned window (docs/WINDOWS.md in Tolkara): a 32-bit address is
- * the low half of its host address. Widening goes through here. */
+ * the low half of its host address. Widening goes through here. Nothing is
+ * mapped in the lowest 64k of the window, so values below that are atoms or
+ * resource ids passed in pointer fields and are kept as they are. */
 extern ULONG_PTR wow64_window;
 static inline void *wow64_ptr( ULONG addr )
 {
-    return addr ? (void *)((ULONG_PTR)addr | wow64_window) : NULL;
+    return addr >= 0x10000 ? (void *)((ULONG_PTR)addr | wow64_window) : ULongToHandle( addr );
 }
 #undef ULongToPtr
 #define ULongToPtr(ul) wow64_ptr(ul)
