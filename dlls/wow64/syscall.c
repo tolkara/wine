@@ -40,6 +40,7 @@ USHORT current_machine = 0;
 ULONG_PTR args_alignment = 0;
 ULONG_PTR highest_user_address = 0x7ffeffff;
 ULONG_PTR default_zero_bits = 0x7fffffff;
+ULONG_PTR wow64_window = 0;
 
 typedef NTSTATUS (WINAPI *syscall_thunk)( UINT *args );
 
@@ -502,7 +503,9 @@ NTSTATUS WINAPI wow64_NtClose( UINT *args )
 NTSTATUS WINAPI wow64_NtContinueEx( UINT *args )
 {
     void *context = get_ptr( &args );
-    KCONTINUE_ARGUMENT *cont_args = get_ptr( &args );
+    ULONG cont_args32 = get_ulong( &args );
+    /* a small value is the alertable flag, not an address */
+    KCONTINUE_ARGUMENT *cont_args = cont_args32 > 0xff ? ULongToPtr( cont_args32 ) : (void *)(ULONG_PTR)cont_args32;
 
     NTSTATUS status = get_context_return_value( context );
     struct user_apc_frame *frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_APCLIST];
@@ -829,6 +832,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
     highest_user_address = (ULONG_PTR)info.HighestUserAddress;
     default_zero_bits = (ULONG_PTR)info.HighestUserAddress | 0x7fffffff;
     NtQueryInformationProcess( GetCurrentProcess(), ProcessWow64Information, &peb32, sizeof(peb32), NULL );
+    wow64_window = (ULONG_PTR)peb32 & ~(ULONG_PTR)0xffffffff;
     wow64info = (WOW64INFO *)(peb32 + 1);
     wow64info->NativeSystemPageSize = 0x1000;
     wow64info->NativeMachineType    = native_machine;
@@ -1463,7 +1467,7 @@ NTSTATUS WINAPI Wow64RaiseException( int code, EXCEPTION_RECORD *rec )
         ctx32.i386.ContextFlags = CONTEXT_I386_ALL;
         pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx32.i386 );
         if (code == -1) break;
-        int_rec.ExceptionAddress = (void *)(ULONG_PTR)ctx32.i386.Eip;
+        int_rec.ExceptionAddress = ULongToPtr( ctx32.i386.Eip );
         switch (code)
         {
         case 0x00:  /* division by zero */
@@ -1476,7 +1480,7 @@ NTSTATUS WINAPI Wow64RaiseException( int code, EXCEPTION_RECORD *rec )
             break;
         case 0x03:  /* breakpoint */
             int_rec.ExceptionCode = EXCEPTION_BREAKPOINT;
-            int_rec.ExceptionAddress = (void *)(ULONG_PTR)(ctx32.i386.Eip - 1);
+            int_rec.ExceptionAddress = ULongToPtr( ctx32.i386.Eip - 1 );
             int_rec.NumberParameters = 1;
             break;
         case 0x04:  /* overflow */
@@ -1508,13 +1512,13 @@ NTSTATUS WINAPI Wow64RaiseException( int code, EXCEPTION_RECORD *rec )
             ctx32.i386.Eip += 3;
             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx32.i386 );
             int_rec.ExceptionCode    = EXCEPTION_BREAKPOINT;
-            int_rec.ExceptionAddress = (void *)(ULONG_PTR)ctx32.i386.Eip;
+            int_rec.ExceptionAddress = ULongToPtr( ctx32.i386.Eip );
             int_rec.NumberParameters = 1;
             int_rec.ExceptionInformation[0] = ctx32.i386.Eax;
             break;
         default:
             int_rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
-            int_rec.ExceptionAddress = (void *)(ULONG_PTR)ctx32.i386.Eip;
+            int_rec.ExceptionAddress = ULongToPtr( ctx32.i386.Eip );
             int_rec.NumberParameters = 2;
             int_rec.ExceptionInformation[1] = 0xffffffff;
             break;

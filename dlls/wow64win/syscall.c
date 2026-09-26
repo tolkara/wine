@@ -51,10 +51,14 @@ const SYSTEM_SERVICE_TABLE sdwhwin32 =
 };
 
 
+ULONG_PTR wow64_window = 0;
+
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     LdrDisableThreadCalloutsForDll( inst );
+    /* the 32-bit TEB is in the 32-bit address space, wherever the host put it */
+    wow64_window = (ULONG_PTR)((char *)NtCurrentTeb() + NtCurrentTeb()->WowTebOffset) & ~(ULONG_PTR)0xffffffff;
     NtCurrentTeb()->Peb->KernelCallbackTable = user_callbacks;
     return TRUE;
 }

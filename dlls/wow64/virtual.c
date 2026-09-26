@@ -124,7 +124,7 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
     else if (set_limit)
     {
         req->LowestStartingAddress = NULL;
-        req->HighestEndingAddress  = (void *)highest_user_address;
+        req->HighestEndingAddress  = ULongToPtr( highest_user_address );
         req->Alignment             = 0;
 
         params[i].Type = MemExtendedParameterAddressRequirements;
@@ -582,7 +582,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     case MemoryBasicInformation:  /* MEMORY_BASIC_INFORMATION */
         if (len < sizeof(MEMORY_BASIC_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if ((ULONG_PTR)addr > highest_user_address)
+        else if (PtrToUlong( addr ) > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -598,8 +598,8 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
                 info32->State = info.State;
                 info32->Protect = info.Protect;
                 info32->Type = info.Type;
-                if ((ULONG_PTR)info.BaseAddress + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.BaseAddress + 1;
+                if (PtrToUlong( info.BaseAddress ) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address - PtrToUlong( info.BaseAddress ) + 1;
             }
         }
         res_len = sizeof(MEMORY_BASIC_INFORMATION32);
@@ -627,7 +627,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_REGION_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if ((ULONG_PTR)addr > highest_user_address)
+        else if (PtrToUlong( addr ) > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -643,8 +643,8 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
                 info32->CommitSize = info.CommitSize;
                 info32->PartitionId = info.PartitionId;
                 info32->NodePreference = info.NodePreference;
-                if ((ULONG_PTR)info.AllocationBase + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.AllocationBase + 1;
+                if (PtrToUlong( info.AllocationBase ) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address - PtrToUlong( info.AllocationBase ) + 1;
             }
         }
         res_len = sizeof(MEMORY_REGION_INFORMATION32);
@@ -674,7 +674,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_IMAGE_INFORMATION32)) return STATUS_INFO_LENGTH_MISMATCH;
 
-        if ((ULONG_PTR)addr > highest_user_address) status = STATUS_INVALID_PARAMETER;
+        if (PtrToUlong( addr ) > highest_user_address) status = STATUS_INVALID_PARAMETER;
         else
         {
             MEMORY_IMAGE_INFORMATION info;

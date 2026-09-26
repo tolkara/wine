@@ -47,6 +47,18 @@ typedef struct
     ULONG SecurityQualityOfService;
 } OBJECT_ATTRIBUTES32;
 
+
+/* On a host that has nothing below 4 GB the 32-bit address space lives at
+ * a 4 GB-aligned window (docs/WINDOWS.md in Tolkara): a 32-bit address is
+ * the low half of its host address. Widening goes through here. */
+extern ULONG_PTR wow64_window;
+static inline void *wow64_ptr( ULONG addr )
+{
+    return addr ? (void *)((ULONG_PTR)addr | wow64_window) : NULL;
+}
+#undef ULongToPtr
+#define ULongToPtr(ul) wow64_ptr(ul)
+
 static inline ULONG get_ulong( UINT **args ) { return *(*args)++; }
 static inline HANDLE get_handle( UINT **args ) { return LongToHandle( *(*args)++ ); }
 static inline void *get_ptr( UINT **args ) { return ULongToPtr( *(*args)++ ); }

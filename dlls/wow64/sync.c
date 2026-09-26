@@ -1653,7 +1653,7 @@ static BOOL filter_out_state_change( HANDLE handle, DBGUI_WAIT_STATE_CHANGE *sta
     switch (state->NewState)
     {
     case DbgLoadDllStateChange:
-        filter_out = ((ULONG64)state->StateInfo.LoadDll.BaseOfDll >> 32) != 0;
+        filter_out = ((ULONG64)state->StateInfo.LoadDll.BaseOfDll & ~(ULONG64)0xffffffff) != wow64_window;
         if (!filter_out)
         {
             USHORT machine;
@@ -1661,7 +1661,7 @@ static BOOL filter_out_state_change( HANDLE handle, DBGUI_WAIT_STATE_CHANGE *sta
         }
         break;
     case DbgUnloadDllStateChange:
-        filter_out = ((ULONG_PTR)state->StateInfo.UnloadDll.BaseAddress >> 32) != 0;
+        filter_out = ((ULONG_PTR)state->StateInfo.UnloadDll.BaseAddress & ~(ULONG_PTR)0xffffffff) != 0;
         break;
     default:
         filter_out = FALSE;
