@@ -1731,6 +1731,15 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
         }
 
+    case NtUserCallHwndParam_ClientToScreen:
+    case NtUserCallHwndParam_GetChildRect:
+    case NtUserCallHwndParam_GetWindowInfo:
+    case NtUserCallHwndParam_GetWindowThread:
+    case NtUserCallHwndParam_ScreenToClient:
+    case NtUserCallHwndParam_ExposeWindowSurface:
+    case NtUserCallHwndParam_SetRawWindowPos:
+        return NtUserCallHwndParam( hwnd, (ULONG_PTR)ULongToPtr( param ), code );
+
     default:
         return NtUserCallHwndParam( hwnd, param, code );
     }
@@ -1770,6 +1779,15 @@ NTSTATUS WINAPI wow64_NtUserCallOneParam( UINT *args )
     ULONG_PTR arg = get_ulong( &args );
     ULONG code = get_ulong( &args );
 
+    switch (code)
+    {
+    case NtUserCallOneParam_GetPrimaryMonitorRect:
+    case NtUserCallOneParam_D3DKMTOpenAdapterFromGdiDisplayName:
+    case NtUserCallOneParam_GetAsyncKeyboardState:
+    case NtUserGetDeskPattern:
+        arg = (ULONG_PTR)ULongToPtr( arg );
+        break;
+    }
     return NtUserCallOneParam( arg, code );
 }
 
@@ -1802,6 +1820,17 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
             if (info.fMask & MIM_STYLE)      info32->dwStyle = info.dwStyle;
             return TRUE;
         }
+
+    case NtUserCallTwoParam_MonitorFromRect:
+    case NtUserCallTwoParam_GetVirtualScreenRect:
+        return NtUserCallTwoParam( (ULONG_PTR)ULongToPtr( arg1 ), arg2, code );
+
+    case NtUserCallTwoParam_GetMonitorInfo:
+    case NtUserCallTwoParam_SetIMECompositionRect:
+        return NtUserCallTwoParam( arg1, (ULONG_PTR)ULongToPtr( arg2 ), code );
+
+    case NtUserCallTwoParam_AdjustWindowRect:
+        return NtUserCallTwoParam( (ULONG_PTR)ULongToPtr( arg1 ), (ULONG_PTR)ULongToPtr( arg2 ), code );
 
     default:
         return NtUserCallTwoParam( arg1, arg2, code );
@@ -3374,10 +3403,47 @@ NTSTATUS WINAPI wow64_NtUserMessageBeep( UINT *args )
     return NtUserMessageBeep( type );
 }
 
+/* the parameters of a message that are addresses, see is_pointer_message() in win32u */
+static void message_params_32to64( UINT msg, WPARAM *wparam, LPARAM *lparam )
+{
+    switch (msg)
+    {
+    case EM_GETSEL:
+    case CB_GETEDITSEL:
+    case SBM_GETRANGE:
+        *wparam = (WPARAM)ULongToPtr( *wparam );
+        /* fall through */
+    case WM_CREATE: case WM_SETTEXT: case WM_GETTEXT: case WM_WININICHANGE: case WM_DEVMODECHANGE:
+    case WM_GETMINMAXINFO: case WM_DRAWITEM: case WM_MEASUREITEM: case WM_DELETEITEM: case WM_COMPAREITEM:
+    case WM_WINDOWPOSCHANGING: case WM_WINDOWPOSCHANGED: case WM_COPYDATA: case WM_HELP:
+    case WM_STYLECHANGING: case WM_STYLECHANGED:
+    case WM_NCCREATE: case WM_NCCALCSIZE: case WM_GETDLGCODE:
+    case EM_GETRECT: case EM_SETRECT: case EM_SETRECTNP:
+    case EM_REPLACESEL: case EM_GETLINE: case EM_SETTABSTOPS:
+    case SBM_SETSCROLLINFO: case SBM_GETSCROLLINFO: case SBM_GETSCROLLBARINFO:
+    case CB_ADDSTRING: case CB_DIR: case CB_GETLBTEXT: case CB_INSERTSTRING: case CB_FINDSTRING:
+    case CB_SELECTSTRING: case CB_GETDROPPEDCONTROLRECT: case CB_FINDSTRINGEXACT: case CB_GETCOMBOBOXINFO:
+    case LB_ADDSTRING: case LB_INSERTSTRING: case LB_GETTEXT: case LB_SELECTSTRING: case LB_DIR:
+    case LB_FINDSTRING: case LB_GETSELITEMS: case LB_SETTABSTOPS: case LB_ADDFILE: case LB_GETITEMRECT:
+    case LB_FINDSTRINGEXACT:
+    case WM_NEXTMENU: case WM_SIZING: case WM_MOVING:
+    case WM_MDICREATE: case WM_MDIGETACTIVE: case WM_DROPOBJECT: case WM_QUERYDROPOBJECT:
+    case WM_DRAGLOOP: case WM_DRAGSELECT: case WM_DRAGMOVE:
+    case WM_ASKCBFORMATNAME:
+        *lparam = (LPARAM)ULongToPtr( *lparam );
+        break;
+    case WM_DEVICECHANGE:
+        if (*wparam & 0x8000) *lparam = (LPARAM)ULongToPtr( *lparam );
+        break;
+    }
+}
+
 static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                     void *result_info, DWORD type, BOOL ansi )
 {
     LRESULT ret = 0;
+
+    message_params_32to64( msg, &wparam, &lparam );
 
     switch (msg)
     {
