@@ -184,6 +184,10 @@ static const UINT_PTR host_page_mask = 0xfff;
 /* Note: these are Windows limits, you cannot change them. */
 #ifdef __i386__
 static void *address_space_start = (void *)0x110000; /* keep DOS area clear */
+#elif defined(__APPLE__) && defined(__aarch64__)
+/* The arm64 kernel maps nothing below 4 GB for a native process: no page zero
+ * smaller than that, and fixed mappings below it are invalid addresses. */
+static void *address_space_start = (void *)0x100000000;
 #else
 static void *address_space_start = (void *)0x10000;
 #endif
@@ -751,6 +755,28 @@ static void mmap_init( const struct preload_info *preload_info )
 #else
 
     if (preload_info) return;
+#if defined(__APPLE__) && defined(__aarch64__)
+    {
+        /* No preloader and no reservation segments here: the process starts
+         * with the kernel's floor (above 4 GB and the loader's own image)
+         * and the host's libraries scattered above it. Take the bounds from
+         * the kernel and reserve the first 64 GB of holes for our views. */
+        task_vm_info_data_t info;
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        char *start, *end;
+
+        if (!task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count ))
+        {
+            start = (char *)ROUND_SIZE( 0, info.min_address, granularity_mask );
+            if (start > (char *)address_space_start) address_space_start = start;
+            end = min( (char *)address_space_start + 0x1000000000, (char *)host_addr_space_limit );
+            TRACE( "reserving holes in %p-%p\n", address_space_start, end );
+            reserve_area( address_space_start, end );
+        }
+        else TRACE( "task_info failed; nothing reserved\n" );
+        return;
+    }
+#endif
     /* if we don't have a preloader, try to reserve the space now */
     reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
     reserve_area( (void *)0x00007f000000, (void *)0x00007fff0000 );
@@ -2784,6 +2810,19 @@ static void *get_host_addr_space_limit(void)
     unsigned int flags = MAP_PRIVATE | MAP_ANON;
     UINT_PTR addr = (UINT_PTR)1 << 63;
 
+#ifdef __APPLE__
+    {
+        /* the kernel says where the map ends; probing by mmap hints overshoots it */
+        task_vm_info_data_t info;
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        kern_return_t ret = task_info( mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count );
+
+        TRACE( "task_info %#x min_address %#llx max_address %#llx\n", ret,
+               (unsigned long long)info.min_address, (unsigned long long)info.max_address );
+        if (!ret && info.max_address) return (void *)((UINT_PTR)info.max_address & ~granularity_mask);
+    }
+#endif
+
 #ifdef MAP_FIXED_NOREPLACE
     flags |= MAP_FIXED_NOREPLACE;
 #endif
@@ -3665,6 +3704,9 @@ void virtual_init(void)
 #ifdef _WIN64
     host_addr_space_limit = get_host_addr_space_limit();
     TRACE( "host addr space limit: %p\n", host_addr_space_limit );
+    /* a host smaller than Windows' 128 TB bounds the Windows limits too */
+    if (host_addr_space_limit < address_space_limit)
+        address_space_limit = user_space_limit = working_set_limit = host_addr_space_limit;
 #else
     host_addr_space_limit = address_space_limit;
 #endif
@@ -4049,14 +4091,26 @@ TEB *virtual_alloc_first_teb(void)
     /* reserve space for shared user data */
     status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&user_shared_data, 0, &data_size,
                                       MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
+    if (status && (char *)user_shared_data < (char *)address_space_start)
+    {
+        /* The host has no memory at the Windows address (arm64 macOS starts
+         * the address space at 4 GB). Put the page where it can go; the PE
+         * side asks for the address instead of assuming it. */
+        user_shared_data = NULL;
+        status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&user_shared_data, 0, &data_size,
+                                          MEM_RESERVE | MEM_COMMIT, PAGE_READONLY );
+        if (!status) WARN( "user shared data relocated to %p\n", user_shared_data );
+    }
     if (status)
     {
         ERR( "wine: failed to map the shared user data: %08x\n", status );
         exit(1);
     }
 
-    NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
-                             MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
+    status = NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
+                                      MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
+    if (status && is_win64 && address_space_start >= (void *)limit_2g)  /* no memory below 2 GB on this host */
+        NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, 0, &total, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
     teb_block_pos = 30;
     ptr = (char *)teb_block + 30 * block_size;
     data_size = 2 * block_size;
