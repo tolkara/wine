@@ -1389,6 +1389,13 @@ static int get_unix_prot( BYTE vprot )
         if (vprot & VPROT_WRITECOPY) prot |= PROT_WRITE | PROT_READ;
         if (vprot & VPROT_EXEC) prot |= PROT_EXEC | PROT_READ;
         if (vprot & VPROT_WRITEWATCH) prot &= ~PROT_WRITE;
+#if defined(__APPLE__) && defined(__aarch64__)
+        /* The kernel refuses memory that is writable and executable at once.
+         * Pages are filled while writable and run once they are protected
+         * read-execute, which is how images are loaded; a program that needs
+         * both at the same time cannot get them from this host. */
+        if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) prot &= ~PROT_EXEC;
+#endif
     }
     if (!prot) prot = PROT_NONE;
     return prot;
