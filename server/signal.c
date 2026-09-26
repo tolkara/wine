@@ -97,6 +97,8 @@ static struct handler *handler_sigterm;
 static struct handler *handler_sigint;
 static struct handler *handler_sigchld;
 static struct handler *handler_sigio;
+static struct handler *handler_exit;
+static int exit_done[2] = { -1, -1 };
 
 static int watchdog;
 
@@ -192,6 +194,29 @@ static void sigint_callback(void)
     shutdown_master_socket();
 }
 
+/* process exit callback for a server running as a thread of its client */
+static void exit_callback(void)
+{
+    char dummy = 0;
+
+    flush_registry();
+    write( exit_done[1], &dummy, 1 );
+}
+
+/* called by the client when its process exits, with the server running as a
+ * thread of it: the registry is saved before the process goes away */
+DECLSPEC_EXPORT void __wine_server_thread_exit(void)
+{
+    struct pollfd pfd;
+    char dummy;
+
+    if (!handler_exit) return;
+    do_signal( handler_exit );
+    pfd.fd = exit_done[0];
+    pfd.events = POLLIN;
+    if (poll( &pfd, 1, 5000 ) == 1) read( exit_done[0], &dummy, 1 );
+}
+
 /* SIGHUP handler */
 static void do_sighup( int signum )
 {
@@ -276,6 +301,13 @@ void init_signals(void)
     if (!(handler_sigint  = create_handler( sigint_callback ))) goto error;
     if (!(handler_sigchld = create_handler( sigchld_callback ))) goto error;
     if (!(handler_sigio   = create_handler( sigio_callback ))) goto error;
+
+    if (in_process)  /* the signals belong to the client */
+    {
+        if (pipe( exit_done ) == -1) goto error;
+        if (!(handler_exit = create_handler( exit_callback ))) goto error;
+        return;
+    }
 
     sigemptyset( &blocked_sigset );
     sigaddset( &blocked_sigset, SIGCHLD );

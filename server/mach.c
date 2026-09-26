@@ -100,6 +100,7 @@ void init_tracing_mechanism(void)
 {
     mach_port_t bp;
 
+    if (in_process) return;  /* the only client is this task */
     if (task_get_bootstrap_port( mach_task_self(), &bp ) != KERN_SUCCESS)
         fatal_error( "Can't find bootstrap port\n" );
     if (mach_port_allocate( mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &server_mach_port ) != KERN_SUCCESS)
@@ -126,7 +127,13 @@ void init_process_tracing( struct process *process )
         mach_msg_trailer_t          trailer; /* only present on receive */
     } msg;
 
-    for (;;)
+    if (in_process)  /* the client process is this task; no other one sends its port */
+    {
+        if (process->unix_pid == getpid() && !process->trace_data &&
+            !mach_port_mod_refs( mach_task_self(), mach_task_self(), MACH_PORT_RIGHT_SEND, 1 ))
+            process->trace_data = mach_task_self();
+    }
+    else for (;;)
     {
         ret = mach_msg( &msg.header, MACH_RCV_MSG|MACH_RCV_TIMEOUT, 0, sizeof(msg),
                         server_mach_port, 0, 0 );

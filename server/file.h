@@ -25,6 +25,14 @@
 
 #include "object.h"
 
+#ifdef __APPLE__
+/* a server running as a thread of its client process changes only its own working directory */
+extern int pthread_chdir_np( const char *path );
+extern int pthread_fchdir_np( int fd );
+#define chdir(path) (in_process ? pthread_chdir_np( path ) : chdir( path ))
+#define fchdir(fd) (in_process ? pthread_fchdir_np( fd ) : fchdir( fd ))
+#endif
+
 struct fd;
 struct mapping;
 struct async_queue;

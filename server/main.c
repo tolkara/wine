@@ -38,6 +38,8 @@
 /* command-line options */
 int debug_level = 0;
 int foreground = 0;
+int in_process = 0;  /* running as a thread of the only client process */
+static int ready_fd = -1;  /* told when clients can connect, if in_process */
 timeout_t master_socket_timeout = 3 * -TICKS_PER_SEC;  /* master socket timeout, default is 3 seconds */
 const char *server_argv0;
 
@@ -220,14 +222,24 @@ int main( int argc, char *argv[] )
 
     /* setup temporary handlers before the real signal initialization is done */
     signal( SIGPIPE, SIG_IGN );
-    signal( SIGHUP, sigterm_handler );
-    signal( SIGINT, sigterm_handler );
-    signal( SIGQUIT, sigterm_handler );
-    signal( SIGTERM, sigterm_handler );
-    signal( SIGABRT, sigterm_handler );
+    if (!in_process)  /* the signals belong to the client then */
+    {
+        signal( SIGHUP, sigterm_handler );
+        signal( SIGINT, sigterm_handler );
+        signal( SIGQUIT, sigterm_handler );
+        signal( SIGTERM, sigterm_handler );
+        signal( SIGABRT, sigterm_handler );
+    }
 
     sock_init();
     open_master_socket();
+    if (ready_fd != -1)
+    {
+        char dummy = 0;
+        write( ready_fd, &dummy, 1 );
+        close( ready_fd );
+        ready_fd = -1;
+    }
 
     if (debug_level) fprintf( stderr, "wineserver: starting (pid=%ld)\n", (long) getpid() );
     set_current_time();
@@ -238,4 +250,17 @@ int main( int argc, char *argv[] )
     init_registry();
     main_loop();
     return 0;
+}
+
+/* entry point of a server that runs as a thread of its only client process,
+ * where no other process can be started: it stays in the foreground, never
+ * exits on its own and leaves the process's signals to the client; a byte
+ * written to ready says that clients can connect */
+DECLSPEC_EXPORT int __wine_server_thread_main( int argc, char *argv[], int ready )
+{
+    in_process = 1;
+    ready_fd = ready;
+    foreground = 1;
+    master_socket_timeout = TIMEOUT_INFINITE;
+    return main( argc, argv );
 }

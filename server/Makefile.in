@@ -1,4 +1,4 @@
-PROGRAMS = wineserver
+PROGRAMS = wineserver wineserver.so
 
 SOURCES = \
 	async.c \
@@ -49,5 +49,8 @@ SOURCES = \
 
 UNIX_CFLAGS = $(INOTIFY_CFLAGS)
 UNIX_LIBS   = $(LDEXECFLAGS) $(RT_LIBS) $(INOTIFY_LIBS) $(PROCSTAT_LIBS)
+
+# the same server as a library, for a process that runs it in a thread of its own
+wineserver_so_LDFLAGS = -dynamiclib -install_name @rpath/wineserver.so
 
 unicode_EXTRADEFS = -DBINDIR="\"${bindir}\"" -DDATADIR="\"${datadir}\""
