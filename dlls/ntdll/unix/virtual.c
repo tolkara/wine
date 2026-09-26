@@ -2488,7 +2488,8 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         if (base && (ULONG_PTR)base < limit_4g) base = (char *)base + (ULONG_PTR)wow64_window;
         if (limit_high && limit_high < limit_4g)
         {
-            if (limit_low >= limit_4g) limit_low = 0x10000;  /* a clamp to the host floor, keep the DOS area free instead */
+            /* the lowest 64k of the 32-bit address space stay free, as on Windows */
+            if (limit_low < 0x10000 || limit_low >= limit_4g) limit_low = 0x10000;
             limit_low += (ULONG_PTR)wow64_window;
             limit_high += (ULONG_PTR)wow64_window;
         }
