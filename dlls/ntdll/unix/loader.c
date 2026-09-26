@@ -217,6 +217,9 @@ const char *home_dir = NULL;
 const char *data_dir = NULL;
 const char *build_dir = NULL;
 const char *config_dir = NULL;
+/* no other process can be started (an iPadOS app): the server runs in a
+ * thread of this one, and nothing else is spawned */
+BOOL single_process = FALSE;
 const char *wineloader = NULL;
 const char **dll_paths = NULL;
 const char **system_dll_paths = NULL;
@@ -640,6 +643,61 @@ static int exec_wineserver( pid_t *pid, char **argv )
 }
 
 
+static int (*server_main)( int argc, char *argv[], int ready );
+static BOOL server_debug;
+
+/***********************************************************************
+ *           server_thread
+ */
+static void *server_thread( void *arg )
+{
+    static char name[] = "wineserver", debug_flag[] = "-d";
+    char *argv[3] = { name, server_debug ? debug_flag : NULL, NULL };
+    sigset_t all;
+
+    /* the process's signals are for the Windows threads */
+    sigfillset( &all );
+    pthread_sigmask( SIG_BLOCK, &all, NULL );
+    server_main( argv[1] ? 2 : 1, argv, (int)(INT_PTR)arg );
+    return NULL;
+}
+
+
+/***********************************************************************
+ *           start_server_thread
+ *
+ * Start the server in a thread of this process, in single-process mode.
+ */
+static void start_server_thread( BOOL debug )
+{
+    char *path = build_dir ? build_path( build_dir, "server/wineserver.so" ) : build_path( bin_dir, "wineserver.so" );
+    void *handle = dlopen( path, RTLD_NOW );
+    void (*server_exit)(void);
+    pthread_attr_t attr;
+    pthread_t thread;
+    int ready[2];
+    char dummy;
+
+    if (!handle) fatal_error( "could not load %s: %s\n", path, dlerror() );
+    if (!(server_main = dlsym( handle, "__wine_server_thread_main" )))
+        fatal_error( "%s has no server thread entry point\n", path );
+    free( path );
+    server_debug = debug;
+    if (pipe( ready ) == -1) fatal_error( "could not create a pipe for the server thread\n" );
+    pthread_attr_init( &attr );
+    pthread_attr_setdetachstate( &attr, PTHREAD_CREATE_DETACHED );
+    pthread_attr_setstacksize( &attr, 1024 * 1024 );
+    if (pthread_create( &thread, &attr, server_thread, (void *)(INT_PTR)ready[1] ))
+        fatal_error( "could not start the server thread\n" );
+    pthread_attr_destroy( &attr );
+    /* wait until clients can connect */
+    if (read( ready[0], &dummy, 1 ) != 1) fatal_error( "the server thread did not start\n" );
+    close( ready[0] );
+    /* the server saves the registry before the process goes away */
+    if ((server_exit = dlsym( handle, "__wine_server_thread_exit" ))) atexit( server_exit );
+}
+
+
 /***********************************************************************
  *           start_server
  *
@@ -651,6 +709,11 @@ void start_server( BOOL debug )
     char *argv[3];
     static char debug_flag[] = "-d";
 
+    if (!started && single_process)
+    {
+        start_server_thread( debug );
+        started = TRUE;
+    }
     if (!started)
     {
         int status;
@@ -2347,10 +2410,13 @@ static void check_command_line( int argc, char *argv[] )
  */
 DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
 {
+    const char *env;
+
     main_argc = argc;
     main_argv = argv;
 
     init_paths();
+    if ((env = getenv( "WINESINGLEPROCESS" ))) single_process = atoi( env );
     if (!getenv( "WINELOADERNOEXEC" ) || argc <= 1) check_command_line( argc, argv );
 
 #ifdef RLIMIT_NOFILE

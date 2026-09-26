@@ -1284,7 +1284,11 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
 #else
-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
+    /* nor a writable one where the server runs in this process (an iPadOS app) */
+    if (single_process)
+        asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+    else
+        asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
 #endif
     return dir;
 }
@@ -1708,7 +1712,7 @@ void server_init_process_done(void)
     close( initial_cwd );
 
 #ifdef __APPLE__
-    send_server_task_port();
+    if (!single_process) send_server_task_port();  /* the server is in this task */
 #endif
 
     /* Install signal handlers; this cannot be done earlier, since we cannot
