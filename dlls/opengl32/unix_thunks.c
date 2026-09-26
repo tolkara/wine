@@ -36016,8 +36016,8 @@ static NTSTATUS wow64_ext_glBindBuffersRange( void *args )
         PTR32 sizes;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    GLintptr *offsets = copy_wow64_ptr32s( params->offsets, params->count );
-    GLsizeiptr *sizes = copy_wow64_ptr32s( params->sizes, params->count );
+    GLintptr *offsets = copy_wow64_intptr32s( params->offsets, params->count );
+    GLsizeiptr *sizes = copy_wow64_intptr32s( params->sizes, params->count );
     const struct opengl_funcs *funcs = teb->glTable;
     funcs->p_glBindBuffersRange( params->target, params->first, params->count, ULongToPtr(params->buffers), offsets, sizes );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
@@ -36523,7 +36523,7 @@ static NTSTATUS wow64_ext_glBindVertexBuffers( void *args )
         PTR32 strides;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    GLintptr *offsets = copy_wow64_ptr32s( params->offsets, params->count );
+    GLintptr *offsets = copy_wow64_intptr32s( params->offsets, params->count );
     const struct opengl_funcs *funcs = teb->glTable;
     funcs->p_glBindVertexBuffers( params->first, params->count, ULongToPtr(params->buffers), offsets, ULongToPtr(params->strides) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
@@ -42316,7 +42316,7 @@ static NTSTATUS wow64_ext_glDrawCommandsNV( void *args )
         GLuint count;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    GLintptr *indirects = copy_wow64_ptr32s( params->indirects, params->count );
+    GLintptr *indirects = copy_wow64_intptr32s( params->indirects, params->count );
     const struct opengl_funcs *funcs = teb->glTable;
     funcs->p_glDrawCommandsNV( params->primitiveMode, params->buffer, indirects, ULongToPtr(params->sizes), params->count );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
@@ -42355,7 +42355,7 @@ static NTSTATUS wow64_ext_glDrawCommandsStatesNV( void *args )
         GLuint count;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    GLintptr *indirects = copy_wow64_ptr32s( params->indirects, params->count );
+    GLintptr *indirects = copy_wow64_intptr32s( params->indirects, params->count );
     const struct opengl_funcs *funcs = teb->glTable;
     funcs->p_glDrawCommandsStatesNV( params->buffer, indirects, ULongToPtr(params->sizes), ULongToPtr(params->states), ULongToPtr(params->fbos), params->count );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
@@ -72972,7 +72972,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexBuffers( void *args )
         PTR32 strides;
     } *params = args;
     TEB *teb = get_teb64( params->teb );
-    GLintptr *offsets = copy_wow64_ptr32s( params->offsets, params->count );
+    GLintptr *offsets = copy_wow64_intptr32s( params->offsets, params->count );
     const struct opengl_funcs *funcs = teb->glTable;
     funcs->p_glVertexArrayVertexBuffers( params->vaobj, params->first, params->count, ULongToPtr(params->buffers), offsets, ULongToPtr(params->strides) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );

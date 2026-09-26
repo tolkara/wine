@@ -57,11 +57,22 @@ static inline const struct opengl_funcs *get_dc_funcs( HDC hdc )
 
 static inline void *copy_wow64_ptr32s( UINT_PTR address, ULONG count )
 {
-    ULONG *ptrs = (ULONG *)address;
+    ULONG *ptrs = ULongToPtr( address );
     void **tmp;
 
     if (!ptrs || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;
     while (count--) tmp[count] = ULongToPtr(ptrs[count]);
+    return tmp;
+}
+
+/* an array of GLintptr or GLsizeiptr values, which are offsets and sizes, not addresses */
+static inline void *copy_wow64_intptr32s( UINT_PTR address, ULONG count )
+{
+    ULONG *values = ULongToPtr( address );
+    ULONG_PTR *tmp;
+
+    if (!values || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;
+    while (count--) tmp[count] = values[count];
     return tmp;
 }
 

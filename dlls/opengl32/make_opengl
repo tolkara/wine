@@ -405,7 +405,8 @@ sub generate_unix_thunk($$$$)
                 {
                     $arg_type =~ s/^const //;
                 }
-                $input_conv .= "    $arg_type$pname = copy_wow64_ptr32s( params->$pname, params->$pointer_array_count{$_} );\n";
+                my $copy = $arg_type =~ /(sizei|int)ptr/ ? "copy_wow64_intptr32s" : "copy_wow64_ptr32s";
+                $input_conv .= "    $arg_type$pname = $copy( params->$pname, params->$pointer_array_count{$_} );\n";
                 $output_conv .= "    free( $pname );\n";
                 $call_args .= " $pname,";
             }
