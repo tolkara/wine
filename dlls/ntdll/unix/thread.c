@@ -1161,7 +1161,7 @@ void *get_cpu_area( USHORT machine )
 #ifdef _WIN64
     cpu = NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED];
 #else
-    cpu = ULongToPtr( NtCurrentTeb64()->TlsSlots[WOW64_TLS_CPURESERVED] );
+    cpu = wow64_ptr( NtCurrentTeb64()->TlsSlots[WOW64_TLS_CPURESERVED] );
 #endif
     if (cpu->Machine != machine) return NULL;
     switch (cpu->Machine)

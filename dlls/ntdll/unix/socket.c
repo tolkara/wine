@@ -529,7 +529,7 @@ static size_t cmsg_align_32( size_t len )
  * true for all messages */
 static int wow64_translate_control( const WSABUF *control64, struct afd_wsabuf_32 *control32 )
 {
-    char *const buf32 = ULongToPtr(control32->buf);
+    char *const buf32 = wow64_ptr(control32->buf);
     const ULONG max_len = control32->len;
     const char *ptr64 = control64->buf;
     char *ptr32 = buf32;
@@ -990,7 +990,7 @@ static NTSTATUS sock_ioctl_recv( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
 
         for (i = 0; i < count; ++i)
         {
-            async->iov[i].iov_base = ULongToPtr( buffers[i].buf );
+            async->iov[i].iov_base = wow64_ptr( buffers[i].buf );
             async->iov[i].iov_len = buffers[i].len;
         }
     }
@@ -1306,7 +1306,7 @@ static NTSTATUS sock_ioctl_send( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
 
         for (i = 0; i < count; ++i)
         {
-            async->iov[i].iov_base = ULongToPtr( buffers[i].buf );
+            async->iov[i].iov_base = wow64_ptr( buffers[i].buf );
             async->iov[i].iov_len = buffers[i].len;
         }
     }
@@ -1717,7 +1717,7 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
 
                 params.recv_flags = params32->recv_flags;
                 params.msg_flags = params32->msg_flags;
-                params.buffers = ULongToPtr( params32->buffers );
+                params.buffers = wow64_ptr( params32->buffers );
                 params.count = params32->count;
             }
             else

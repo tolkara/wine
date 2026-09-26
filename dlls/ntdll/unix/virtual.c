@@ -210,6 +210,16 @@ static struct file_view *arm64ec_view;
 static char *jit_pool_base, *jit_pool_end;  /* MAP_JIT memory for writable and executable views */
 #endif
 
+#ifdef _WIN64
+/* The 32-bit address space of a WoW64 process lives at a 4 GB-aligned host
+ * address on hosts that have nothing below 4 GB: guest address g is host
+ * address wow64_window | g, so truncating a host address gives the guest
+ * one. Requests bounded below 4 GB are moved into the window and everything
+ * else stays out of it; see docs/WINDOWS.md in Tolkara. */
+char *wow64_window = NULL;
+static const size_t wow64_window_size = (size_t)1 << 32;
+#endif
+
 ULONG_PTR user_space_wow_limit = 0;
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
 
@@ -277,6 +287,30 @@ static inline BOOL is_vprot_exec_write( BYTE vprot )
 static inline BOOL is_jit_pool( const void *addr )
 {
     return (const char *)addr >= jit_pool_base && (const char *)addr < jit_pool_end;
+}
+#endif
+
+#ifdef _WIN64
+/* is the range meant for the 32-bit address space window? */
+static inline BOOL is_wow64_window_range( const void *start, const void *end )
+{
+    return wow64_window && (const char *)start >= wow64_window && (const char *)end <= wow64_window + wow64_window_size;
+}
+
+/* keep a range out of the window: returns FALSE if nothing is left */
+static BOOL exclude_wow64_window( void **start, void **end, int top_down )
+{
+    if (!wow64_window || is_wow64_window_range( *start, *end )) return TRUE;
+    if ((char *)*end <= wow64_window || (char *)*start >= wow64_window + wow64_window_size) return TRUE;
+    /* the range overlaps the window: keep the larger side, or the one the direction favours */
+    if ((char *)*start < wow64_window && (char *)*end > wow64_window + wow64_window_size)
+    {
+        if (top_down) *start = wow64_window + wow64_window_size;
+        else *end = wow64_window;
+    }
+    else if ((char *)*start < wow64_window) *end = wow64_window;
+    else *start = wow64_window + wow64_window_size;
+    return *start < *end;
 }
 #endif
 
@@ -806,7 +840,10 @@ static void mmap_init( const struct preload_info *preload_info )
         /* No preloader and no reservation segments here: the process starts
          * with the kernel's floor (above 4 GB and the loader's own image)
          * and the host's libraries scattered above it. Take the bounds from
-         * the kernel and reserve the first 64 GB of holes for our views. */
+         * the kernel and reserve the holes in the first TB for our views:
+         * the shared cache and a reservation of the kernel's own cover
+         * nearly everything below 448 GB, and the 32-bit address space
+         * window needs 4 GB in one piece above that. */
         task_vm_info_data_t info;
         mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
         char *start, *end;
@@ -815,7 +852,7 @@ static void mmap_init( const struct preload_info *preload_info )
         {
             start = (char *)ROUND_SIZE( 0, info.min_address, granularity_mask );
             if (start > (char *)address_space_start) address_space_start = start;
-            end = min( (char *)address_space_start + 0x1000000000, (char *)host_addr_space_limit );
+            end = min( (char *)address_space_start + 0x10000000000, (char *)host_addr_space_limit );
             TRACE( "reserving holes in %p-%p\n", address_space_start, end );
             reserve_area( address_space_start, end );
         }
@@ -1621,6 +1658,16 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
             continue;
         }
 #endif
+#ifdef _WIN64
+        if (wow64_window && !is_wow64_window_range( base, end ) &&
+            (char *)start < wow64_window + wow64_window_size && (char *)start + size > wow64_window)
+        {
+            /* the window is kept for the 32-bit address space */
+            if (step > 0) start = ROUND_ADDR( wow64_window + wow64_window_size + step - 1, step - 1 );
+            else start = ROUND_ADDR( wow64_window - size, -step - 1 );
+            continue;
+        }
+#endif
         if (anon_mmap_tryfixed( start, size, unix_prot, 0 ) != MAP_FAILED) return start;
         TRACE( "Found free area is already mapped, start %p.\n", start );
         if (errno != EEXIST)
@@ -2299,6 +2346,9 @@ static void *map_reserved_area( void *limit_low, void *limit_high, size_t size, 
             if (end <= limit_low) return NULL;
             if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
             if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
+#ifdef _WIN64
+            if (!is_wow64_window_range( limit_low, limit_high ) && !exclude_wow64_window( &start, &end, top_down )) continue;
+#endif
             ptr = find_reserved_free_area_outside_preloader( start, end, size, top_down, align_mask );
             if (ptr) break;
         }
@@ -2314,6 +2364,9 @@ static void *map_reserved_area( void *limit_low, void *limit_high, size_t size, 
             if (end <= limit_low) continue;
             if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
             if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
+#ifdef _WIN64
+            if (!is_wow64_window_range( limit_low, limit_high ) && !exclude_wow64_window( &start, &end, top_down )) continue;
+#endif
             ptr = find_reserved_free_area_outside_preloader( start, end, size, top_down, align_mask );
             if (ptr) break;
         }
@@ -2417,6 +2470,20 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         return STATUS_SUCCESS;
     }
 
+#ifdef _WIN64
+    if (wow64_window)
+    {
+        /* Nothing below 4 GB exists on this host: an address there means the
+         * 32-bit address space, which is at the window. */
+        if (base && (ULONG_PTR)base < limit_4g) base = (char *)base + (ULONG_PTR)wow64_window;
+        if (limit_high && limit_high < limit_4g)
+        {
+            if (limit_low >= limit_4g) limit_low = 0x10000;  /* a clamp to the host floor, keep the DOS area free instead */
+            limit_low += (ULONG_PTR)wow64_window;
+            limit_high += (ULONG_PTR)wow64_window;
+        }
+    }
+#endif
     if (limit_high && limit_low >= limit_high) return STATUS_INVALID_PARAMETER;
 
     if (use_kernel_writewatch && vprot & VPROT_WRITEWATCH)
@@ -3787,6 +3854,9 @@ static void *alloc_virtual_heap( SIZE_T size )
         if (is_beyond_limit( base, area->size, address_space_limit ))
             address_space_limit = host_addr_space_limit = end;
         if (is_win64 && base < (void *)0x80000000) break;
+#ifdef _WIN64
+        if (!exclude_wow64_window( &base, &end, TRUE )) continue;
+#endif
         if (preload_reserve_end >= end)
         {
             if (preload_reserve_start <= base) continue;  /* no space in that area */
@@ -3856,6 +3926,35 @@ static void jit_pool_init(void)
 #endif
 
 
+#ifdef _WIN64
+/***********************************************************************
+ *           wow64_window_init
+ *
+ * Pick the 4 GB-aligned window that holds the 32-bit address space on a
+ * host that has nothing below 4 GB; the first reserved area that can hold
+ * one gets it. Every 64-bit process reserves it, so that the TEB block and
+ * the shared user data can go there before the process is known to be WoW64.
+ */
+static void wow64_window_init(void)
+{
+    struct reserved_area *area;
+
+    if (address_space_start < (void *)limit_4g) return;  /* the 32-bit address space itself exists */
+    LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
+    {
+        char *start = ROUND_ADDR( (char *)area->base + wow64_window_size - 1, wow64_window_size - 1 );
+        if (start + wow64_window_size <= (char *)area->base + area->size)
+        {
+            wow64_window = start;
+            TRACE( "32-bit address space window at %p-%p\n", wow64_window, wow64_window + wow64_window_size );
+            return;
+        }
+    }
+    ERR( "no room for the 32-bit address space window; 32-bit programs will not run\n" );
+}
+#endif
+
+
 /***********************************************************************
  *           virtual_init
  */
@@ -3897,6 +3996,9 @@ void virtual_init(void)
     mmap_init( preload_info ? *preload_info : NULL );
 #ifdef HAVE_JIT_POOL
     jit_pool_init();
+#endif
+#ifdef _WIN64
+    wow64_window_init();
 #endif
 
     if ((preload = getenv("WINEPRELOADRESERVE")))
@@ -4383,7 +4485,7 @@ void virtual_free_teb( TEB *teb )
         size = 0;
         NtFreeVirtualMemory( GetCurrentProcess(), &thread_data->kernel_stack, &size, MEM_RELEASE );
     }
-    if (wow_teb && (ptr = ULongToPtr( wow_teb->DeallocationStack )))
+    if (wow_teb && (ptr = wow64_ptr( wow_teb->DeallocationStack )))
     {
         size = 0;
         NtFreeVirtualMemory( GetCurrentProcess(), &ptr, &size, MEM_RELEASE );
@@ -4436,7 +4538,7 @@ NTSTATUS virtual_clear_tls_index( ULONG index )
             if (wow_teb)
             {
                 if (wow_teb->TlsExpansionSlots)
-                    ((ULONG *)ULongToPtr( wow_teb->TlsExpansionSlots ))[index] = 0;
+                    ((ULONG *)wow64_ptr( wow_teb->TlsExpansionSlots ))[index] = 0;
             }
             else
 #endif
@@ -4606,9 +4708,9 @@ static BOOL is_inside_thread_stack( void *ptr, struct thread_stack_info *stack )
     if ((char *)ptr > stack->start && (char *)ptr <= stack->end) return TRUE;
 
     if (!wow_teb) return FALSE;
-    stack->start = ULongToPtr( wow_teb->DeallocationStack );
-    stack->limit = ULongToPtr( wow_teb->Tib.StackLimit );
-    stack->end   = ULongToPtr( wow_teb->Tib.StackBase );
+    stack->start = wow64_ptr( wow_teb->DeallocationStack );
+    stack->limit = wow64_ptr( wow_teb->Tib.StackLimit );
+    stack->end   = wow64_ptr( wow_teb->Tib.StackBase );
     stack->guaranteed = max( wow_teb->GuaranteedStackBytes, min_guaranteed );
     stack->is_wow = TRUE;
     return ((char *)ptr > stack->start && (char *)ptr <= stack->end);
@@ -5408,6 +5510,9 @@ static NTSTATUS get_extended_params( const MEM_EXTENDED_PARAMETER *parameters, U
 
             if (is_wow64()) limit = get_wow_user_space_limit();
             else limit = (ULONG_PTR)user_space_limit;
+#ifdef _WIN64
+            if (is_wow64() && wow64_window) limit += (ULONG_PTR)wow64_window;
+#endif
 
             if (r->Alignment)
             {

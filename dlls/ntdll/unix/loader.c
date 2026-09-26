@@ -1214,7 +1214,9 @@ static NTSTATUS wow64_get_user_shared_data( void *args )
 {
     ULONG *addr = args;
 
-    if ((ULONG_PTR)user_shared_data >> 32) return STATUS_NOT_SUPPORTED;
+    /* the page is either below 4 GB or inside the 32-bit address space window, where
+     * the low 32 bits of its host address are what 32-bit code uses */
+    if ((ULONG_PTR)user_shared_data >> 32 && PtrToUlong( user_shared_data ) != 0x7ffe0000) return STATUS_NOT_SUPPORTED;
     *addr = PtrToUlong( user_shared_data );
     return STATUS_SUCCESS;
 }

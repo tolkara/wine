@@ -1979,6 +1979,9 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
 
     get_full_path( main_argv[1], curdir, &nt_name );
     status = load_main_exe( &nt_name, 0, module );
+    /* a 32-bit image never sits at its preferred base on a host whose 32-bit
+     * address space is a window, so STATUS_IMAGE_NOT_AT_BASE is the norm */
+    TRACE( "main exe %s: status %x machine %04x\n", debugstr_us(&nt_name), status, main_image_info.Machine );
     /* fail only if the file contained an explicit path */
     if (status == STATUS_DLL_NOT_FOUND &&
         (strpbrk( main_argv[1], "/\\" ) || (main_argv[1][0] && main_argv[1][1] == ':')))
@@ -2000,7 +2003,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
         }
     }
 
-    if (status)  /* try launching it through start.exe */
+    if (!NT_SUCCESS(status))  /* try launching it through start.exe */
     {
         static const char *args[] = { "start.exe", "/exec" };
         free( nt_name.Buffer );

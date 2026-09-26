@@ -88,6 +88,17 @@ static inline WOW_TEB *get_wow_teb( TEB *teb )
     return teb->WowTebOffset ? (WOW_TEB *)((char *)teb + teb->WowTebOffset) : NULL;
 }
 
+#ifdef _WIN64
+extern char *wow64_window;
+/* host pointer for an address in the 32-bit address space, see virtual.c */
+static inline void *wow64_ptr( ULONG addr )
+{
+    return addr ? wow64_window + addr : NULL;
+}
+#else
+#define wow64_ptr(addr) ULongToPtr(addr)
+#endif
+
 static inline BOOL is_wow64(void)
 {
     return !!wow_peb;

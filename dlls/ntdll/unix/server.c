@@ -1951,10 +1951,10 @@ NTSTATUS wow64_wine_server_call( void *args )
     req.data_count = req32->data_count;
     for (i = 0; i < req.data_count; i++)
     {
-        req.data[i].ptr = ULongToPtr( req32->data[i].ptr );
+        req.data[i].ptr = wow64_ptr( req32->data[i].ptr );
         req.data[i].size = req32->data[i].size;
     }
-    req.reply_data = ULongToPtr( req32->reply_data );
+    req.reply_data = wow64_ptr( req32->reply_data );
     status = wine_server_call( &req );
     req32->u.reply = req.u.reply;
     return status;
@@ -1973,7 +1973,7 @@ NTSTATUS wow64_wine_server_fd_to_handle( void *args )
         ULONG        handle;
     } const *params32 = args;
 
-    ULONG *handle32 = ULongToPtr( params32->handle );
+    ULONG *handle32 = wow64_ptr( params32->handle );
     HANDLE handle;
     NTSTATUS ret;
 
@@ -1996,7 +1996,7 @@ NTSTATUS wow64_wine_server_handle_to_fd( void *args )
     } const *params32 = args;
 
     return wine_server_handle_to_fd( ULongToHandle( params32->handle ), params32->access,
-                                     ULongToPtr( params32->unix_fd ), ULongToPtr( params32->options ));
+                                     wow64_ptr( params32->unix_fd ), ULongToPtr( params32->options ));
 }
 
 #endif /* _WIN64 */
