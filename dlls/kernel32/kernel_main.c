@@ -128,6 +128,7 @@ static void copy_startup_info(void)
  */
 static BOOL process_attach( HMODULE module )
 {
+    user_shared_data = __wine_get_user_shared_data();
     RtlSetUnhandledExceptionFilter( UnhandledExceptionFilter );
 
     NtQuerySystemInformation( SystemBasicInformation, &system_info, sizeof(system_info), NULL );
