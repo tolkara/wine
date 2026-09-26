@@ -363,6 +363,30 @@ static void save_subkeys( const struct key *key, const struct key *base, FILE *f
     for (i = 0; i <= key->last_subkey; i++) save_subkeys( key->subkeys[i], base, f );
 }
 
+/* save the volatile keys under a key, with paths from the root: what wineboot
+ * sets up at each start, for a server in a process that cannot run it */
+static void save_volatile_subkeys( const struct key *key, FILE *f )
+{
+    int i;
+
+    if ((key->flags & KEY_VOLATILE) &&
+        ((key->last_value >= 0) || (key->last_subkey == -1) || key->class || (key->flags & KEY_SYMLINK)))
+    {
+        fprintf( f, "\n[" );
+        dump_path( key, root_key, f );
+        fprintf( f, "] %u\n", (unsigned int)((key->modif - ticks_1601_to_1970) / TICKS_PER_SEC) );
+        if (key->class)
+        {
+            fprintf( f, "#class=\"" );
+            dump_strW( key->class, key->classlen, f, "\"\"" );
+            fprintf( f, "\"\n" );
+        }
+        if (key->flags & KEY_SYMLINK) fputs( "#link\n", f );
+        for (i = 0; i <= key->last_value; i++) dump_value( &key->values[i], f );
+    }
+    for (i = 0; i <= key->last_subkey; i++) save_volatile_subkeys( key->subkeys[i], f );
+}
+
 static void dump_operation( const struct key *key, const struct key_value *value, const char *op )
 {
     fprintf( stderr, "%s key ", op );
@@ -873,6 +897,8 @@ static struct key *create_key( struct key *parent, const struct unicode_str *nam
 }
 
 /* recursively create a subkey (for internal use only) */
+static unsigned int load_options;  /* REG_OPTION_VOLATILE while loading volatile.reg */
+
 static struct key *create_key_recursive( struct key *root, const struct unicode_str *name, timeout_t modif )
 {
     struct key *key, *parent = (struct key *)grab_object( root );
@@ -884,7 +910,7 @@ static struct key *create_key_recursive( struct key *root, const struct unicode_
     {
         tmp.str = str;
         tmp.len = get_path_element( str, len );
-        key = create_key_object( &parent->obj, &tmp, OBJ_OPENIF, 0, modif, NULL );
+        key = create_key_object( &parent->obj, &tmp, OBJ_OPENIF, load_options, modif, NULL );
         release_object( parent );
         if (!key) return NULL;
         parent = key;
@@ -1956,6 +1982,20 @@ void init_registry(void)
     free( current_user_path );
     load_init_registry_from_file( "user.reg", hkcu );
 
+    /* the volatile keys wineboot made the last time it ran, where it cannot run */
+    if (in_process)
+    {
+        FILE *f;
+
+        if ((f = fopen( "volatile.reg", "r" )))
+        {
+            load_options = REG_OPTION_VOLATILE;
+            load_keys( root_key, "volatile.reg", f, 0 );
+            load_options = 0;
+            fclose( f );
+        }
+    }
+
     /* set the shared flag on Software\Classes\Wow6432Node for all platforms */
     for (i = 1; i < supported_machines_count; i++)
     {
@@ -2155,6 +2195,18 @@ void flush_registry(void)
             fprintf( stderr, "wineserver: could not save registry branch to %s",
                      save_branch_info[i].filename );
             perror( " " );
+        }
+    }
+    /* for a server that will run in a process of its own and without wineboot */
+    if (!in_process && root_key)
+    {
+        FILE *f;
+
+        if ((f = fopen( "volatile.reg.tmp", "w" )))
+        {
+            fprintf( f, "WINE REGISTRY Version 2\n;; Volatile keys, for a server that cannot run wineboot\n" );
+            save_volatile_subkeys( root_key, f );
+            if (fclose( f ) || rename( "volatile.reg.tmp", "volatile.reg" )) unlink( "volatile.reg.tmp" );
         }
     }
     if (fchdir( server_dir_fd ) == -1) fatal_error( "chdir to server dir: %s\n", strerror( errno ));
