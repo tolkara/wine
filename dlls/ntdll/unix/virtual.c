@@ -4563,8 +4563,9 @@ void *virtual_setup_exception( void *stack_ptr, size_t size, EXCEPTION_RECORD *r
     {
         /* stack overflow on last page, unrecoverable */
         UINT diff = stack_info.start + host_page_size - stack;
-        ERR( "stack overflow %u bytes addr %p stack %p (%p-%p-%p)\n",
-             diff, rec->ExceptionAddress, stack, stack_info.start, stack_info.limit, stack_info.end );
+        ERR( "stack overflow %u bytes addr %p stack %p (%p-%p-%p) code %08x info %p %p\n",
+             diff, rec->ExceptionAddress, stack, stack_info.start, stack_info.limit, stack_info.end,
+             (UINT)rec->ExceptionCode, (void *)rec->ExceptionInformation[0], (void *)rec->ExceptionInformation[1] );
         abort_thread(1);
     }
     else if (stack < stack_info.limit)
