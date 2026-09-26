@@ -1148,6 +1148,19 @@ static NTSTATUS unwind_builtin_dll( void *args )
 #endif /* SO_DLLS_SUPPORTED */
 
 
+/***********************************************************************
+ *           get_user_shared_data
+ *
+ * The address of the KUSER_SHARED_DATA page. It is 0x7ffe0000 where the host
+ * lets us map that address, and somewhere else where it does not.
+ */
+static NTSTATUS get_user_shared_data( void *args )
+{
+    *(void **)args = user_shared_data;
+    return STATUS_SUCCESS;
+}
+
+
 static const unixlib_entry_t unix_call_funcs[] =
 {
     load_so_dll,
@@ -1158,6 +1171,7 @@ static const unixlib_entry_t unix_call_funcs[] =
     unixcall_wine_server_handle_to_fd,
     unixcall_wine_spawnvp,
     system_time_precise,
+    get_user_shared_data,
 };
 
 
@@ -1165,6 +1179,15 @@ static const unixlib_entry_t unix_call_funcs[] =
 
 static NTSTATUS wow64_load_so_dll( void *args ) { return STATUS_INVALID_IMAGE_FORMAT; }
 static NTSTATUS wow64_unwind_builtin_dll( void *args ) { return STATUS_UNSUCCESSFUL; }
+
+static NTSTATUS wow64_get_user_shared_data( void *args )
+{
+    ULONG *addr = args;
+
+    if ((ULONG_PTR)user_shared_data >> 32) return STATUS_NOT_SUPPORTED;
+    *addr = PtrToUlong( user_shared_data );
+    return STATUS_SUCCESS;
+}
 
 const unixlib_entry_t unix_call_wow64_funcs[] =
 {
@@ -1176,6 +1199,7 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
     wow64_wine_server_handle_to_fd,
     wow64_wine_spawnvp,
     system_time_precise,
+    wow64_get_user_shared_data,
 };
 
 #endif  /* _WIN64 */

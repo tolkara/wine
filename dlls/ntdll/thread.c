@@ -38,6 +38,17 @@ WINE_DECLARE_DEBUG_CHANNEL(timestamp);
 
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
 
+/***********************************************************************
+ *           __wine_get_user_shared_data   (NTDLL.@)
+ *
+ * The KUSER_SHARED_DATA page: 0x7ffe0000 as on Windows, or elsewhere on a
+ * host that cannot map that address. Other modules read it through this.
+ */
+const struct _KUSER_SHARED_DATA * __cdecl __wine_get_user_shared_data(void)
+{
+    return user_shared_data;
+}
+
 struct debug_info
 {
     unsigned int str_pos;       /* current position in strings buffer */

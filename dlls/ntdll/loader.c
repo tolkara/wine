@@ -4416,6 +4416,9 @@ void loader_init( CONTEXT *context, void **entry )
         PEB *peb = NtCurrentTeb()->Peb;
         unsigned int i;
 
+        /* where the Unix side could put the KUSER_SHARED_DATA page */
+        WINE_UNIX_CALL( unix_get_user_shared_data, &user_shared_data );
+
         peb->LdrData            = &ldr;
         peb->FastPebLock        = &peb_lock;
         peb->TlsBitmap          = &tls_bitmap;

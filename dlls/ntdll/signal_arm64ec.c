@@ -2087,6 +2087,9 @@ void WINAPI LdrInitializeThunk( CONTEXT *arm_context, ULONG_PTR unk2, ULONG_PTR 
 {
     union ARM64EC_NT_XCONTEXT context;
     CONTEXT_EX *xctx;
+
+    /* the XState setup below reads the user shared data, which may not be at 0x7ffe0000 */
+    WINE_UNIX_CALL( unix_get_user_shared_data, &user_shared_data );
     RtlInitializeExtendedContext( &context, ctx_flags_arm_to_x64( arm_context->ContextFlags), &xctx );
 
     if (!__os_arm64x_check_call)

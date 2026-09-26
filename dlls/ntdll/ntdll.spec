@@ -1744,6 +1744,7 @@
 # Unix interface
 @ stdcall __wine_unix_spawnvp(long ptr)
 @ stdcall __wine_ctrl_routine(ptr)
+@ cdecl __wine_get_user_shared_data()
 @ extern -private __wine_syscall_dispatcher
 @ extern -private __wine_unix_call_dispatcher
 @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
