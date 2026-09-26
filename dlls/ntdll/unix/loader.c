@@ -138,7 +138,11 @@ static void stub_syscall( const char *name )
 #define SYSCALL_STUB(name) static void name(void) { stub_syscall( #name ); }
 ALL_SYSCALL_STUBS
 
+#if defined(__APPLE__) && defined(__aarch64__)
+static void *syscalls[] =  /* entries with more than eight arguments are replaced, see below */
+#else
 static void * const syscalls[] =
+#endif
 {
 #define SYSCALL_ENTRY(id,name,args) name,
     ALL_SYSCALLS
@@ -166,6 +170,32 @@ static const char *ntsyscall_names[] =
 
 static const char **syscall_names[4] = { ntsyscall_names };
 static const char **usercall_names;
+
+#if defined(__APPLE__) && defined(__aarch64__)
+#include "syscall_darwin.h"
+
+/***********************************************************************
+ *           init_darwin_syscalls
+ *
+ * The dispatcher copies stack arguments as 8-byte slots (the Windows ABI);
+ * Apple's arm64 ABI packs them at their natural alignment. Route the
+ * syscalls with stack arguments through wrappers that take them as ULONG_PTR.
+ */
+static void init_darwin_syscalls(void)
+{
+    unsigned int i, j;
+
+    for (i = 0; i < ARRAY_SIZE(darwin_syscall_wrappers); i++)
+        for (j = 0; j < ARRAY_SIZE(syscalls); j++)
+            if (!strcmp( ntsyscall_names[j], darwin_syscall_wrappers[i].name ))
+            {
+                syscalls[j] = darwin_syscall_wrappers[i].func;
+                break;
+            }
+}
+#else
+static inline void init_darwin_syscalls(void) {}
+#endif
 
 void ntdll_add_syscall_debug_info( UINT idx, const char **names, const char **user_names )
 {
@@ -1940,6 +1970,7 @@ static void start_main_thread(void)
 {
     TEB *teb = virtual_alloc_first_teb();
 
+    init_darwin_syscalls();
     signal_init_threading();
     signal_alloc_thread( teb );
     dbg_init();
