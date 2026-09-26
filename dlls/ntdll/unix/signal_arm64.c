@@ -1155,6 +1155,15 @@ static void bus_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 {
     EXCEPTION_RECORD rec = { EXCEPTION_DATATYPE_MISALIGNMENT };
 
+#ifdef __APPLE__
+    /* The kernel reports translation and permission faults as SIGBUS too, with
+     * the same si_code as alignment faults; the syndrome tells them apart. */
+    if ((get_fault_esr( sigcontext ) & 0x3f) != 0x21)  /* not an alignment fault */
+    {
+        segv_handler( signal, siginfo, sigcontext );
+        return;
+    }
+#endif
     setup_exception( sigcontext, &rec );
 }
 
