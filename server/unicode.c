@@ -21,6 +21,7 @@
 #include "config.h"
 
 #include <ctype.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -278,35 +279,42 @@ static char *build_relative_path( const char *base, const char *from, const char
 static char *get_nls_dir(void)
 {
     char *p, *dir, *ret;
+    Dl_info info;
 
+    /* in process, the server is a library installed where its binary would be */
+    if (in_process && dladdr( (void *)get_nls_dir, &info ) && info.dli_fname)
+        dir = realpath( info.dli_fname, NULL );
+    else
+    {
 #if defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__NetBSD__)
-    dir = realpath( "/proc/self/exe", NULL );
+        dir = realpath( "/proc/self/exe", NULL );
 #elif defined (__FreeBSD__) || defined(__DragonFly__)
-    static int pathname[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
-    size_t dir_size = PATH_MAX;
-    dir = malloc( dir_size );
-    if (dir)
-    {
-        if (sysctl( pathname, ARRAY_SIZE( pathname ), dir, &dir_size, NULL, 0 ))
+        static int pathname[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+        size_t dir_size = PATH_MAX;
+        dir = malloc( dir_size );
+        if (dir)
         {
-            free( dir );
-            dir = NULL;
+            if (sysctl( pathname, ARRAY_SIZE( pathname ), dir, &dir_size, NULL, 0 ))
+            {
+                free( dir );
+                dir = NULL;
+            }
         }
-    }
 #elif defined(__APPLE__)
-    uint32_t dir_size = PATH_MAX;
-    dir = malloc( dir_size );
-    if (dir)
-    {
-        if (_NSGetExecutablePath( dir, &dir_size ))
+        uint32_t dir_size = PATH_MAX;
+        dir = malloc( dir_size );
+        if (dir)
         {
-            free( dir );
-            dir = NULL;
+            if (_NSGetExecutablePath( dir, &dir_size ))
+            {
+                free( dir );
+                dir = NULL;
+            }
         }
-    }
 #else
-    dir = realpath( server_argv0, NULL );
+        dir = realpath( server_argv0, NULL );
 #endif
+    }
     if (!dir) return NULL;
     if (!(p = strrchr( dir, '/' )))
     {
