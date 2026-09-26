@@ -700,6 +700,12 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     data_size_t handles_size, jobs_size;
     obj_handle_t *handles, *jobs;
 
+    if (single_process)
+    {
+        WARN( "no other process can be started here: %s\n", debugstr_us( &params->ImagePathName ));
+        return STATUS_NOT_SUPPORTED;
+    }
+
     if (thread_flags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER)
     {
         WARN( "Invalid thread flags %#x.\n", thread_flags );

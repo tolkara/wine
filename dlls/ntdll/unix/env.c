@@ -1623,6 +1623,12 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
     }
 
     virtual_init_user_shared_data();
+    if (single_process)
+    {
+        /* the prefix was prepared elsewhere; nothing else is started */
+        NtClose( handles[0] );
+        return;
+    }
     env[size] = 0;
     params.Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;
     params.Environment     = env;
