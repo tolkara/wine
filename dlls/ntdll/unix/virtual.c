@@ -797,6 +797,36 @@ static void reserve_area( void *addr, void *end )
 }
 
 
+#if defined(__APPLE__) && defined(__aarch64__)
+/***********************************************************************
+ *           reserve_small_address_space
+ *
+ * A host whose whole map ends within the first TB (iPadOS) also charges
+ * every reservation, PROT_NONE ones included, against a budget of a few
+ * dozen GB that its own libraries, heaps and thread stacks share. Reserve
+ * one piece there: 4 GB-aligned room for the 32-bit address space window
+ * and as much again for the 64-bit side's views.
+ */
+static BOOL reserve_small_address_space( void *start, void *end )
+{
+    const mach_vm_size_t window = (mach_vm_size_t)1 << 32, size = 2 * window;
+    mach_vm_address_t address = ((mach_vm_address_t)start + window - 1) & ~(window - 1);
+
+    for (; address + size <= (mach_vm_address_t)end; address += window)
+    {
+        mach_vm_address_t alloc_address = address;
+
+        if (mach_vm_map( mach_task_self(), &alloc_address, size, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL,
+                         0, 0, PROT_NONE, VM_PROT_ALL, VM_INHERIT_COPY )) continue;
+        mmap_add_reserved_area( (void *)alloc_address, size );
+        TRACE( "small address space %p-%p: reserved %p-%p\n", start, end,
+               (void *)alloc_address, (char *)alloc_address + size );
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 static void mmap_init( const struct preload_info *preload_info )
 {
 #ifndef _WIN64
@@ -863,8 +893,11 @@ static void mmap_init( const struct preload_info *preload_info )
             start = (char *)ROUND_SIZE( 0, info.min_address, granularity_mask );
             if (start > (char *)address_space_start) address_space_start = start;
             end = min( (char *)address_space_start + 0x10000000000, (char *)host_addr_space_limit );
-            TRACE( "reserving holes in %p-%p\n", address_space_start, end );
-            reserve_area( address_space_start, end );
+            if (end < (char *)host_addr_space_limit || !reserve_small_address_space( address_space_start, end ))
+            {
+                TRACE( "reserving holes in %p-%p\n", address_space_start, end );
+                reserve_area( address_space_start, end );
+            }
         }
         else TRACE( "task_info failed; nothing reserved\n" );
         return;
