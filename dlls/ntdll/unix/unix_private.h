@@ -122,6 +122,9 @@ struct ntdll_thread_data
     PRTL_THREAD_START_ROUTINE start;         /* thread entry point */
     void                     *param;         /* thread entry point parameter */
     void                     *jmp_buf;       /* setjmp buffer for exception handling */
+#ifdef HAVE_JIT_POOL
+    int                       jit_writable;  /* JIT pool pages are writable, not executable, on this thread */
+#endif
 };
 
 C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
@@ -302,6 +305,9 @@ extern NTSTATUS virtual_alloc_thread_stack( INITIAL_TEB *stack, ULONG_PTR limit_
 extern void virtual_map_user_shared_data(void);
 extern void virtual_init_user_shared_data(void);
 extern NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack );
+#ifdef HAVE_JIT_POOL
+extern int virtual_handle_jit_fault( ULONG_PTR err, void *addr );
+#endif
 extern unsigned int virtual_locked_server_call( void *req_ptr );
 extern ssize_t virtual_locked_read( int fd, void *addr, size_t size );
 extern ssize_t virtual_locked_pread( int fd, void *addr, size_t size, off_t offset );

@@ -792,6 +792,46 @@ static void setup_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec )
 }
 
 
+#ifdef HAVE_JIT_POOL
+/***********************************************************************
+ *           jit_exec_resume
+ *
+ * Switch the thread's JIT pool pages back from writable to executable.
+ * A signal handler runs with them executable, and after it returns they
+ * are writable again if they were so before the signal; the switch has
+ * to happen in the thread itself. The handler parks the full register
+ * state on the stack and points the thread here, and the trap at the end
+ * brings it back to the handler, which restores the state.
+ */
+extern void jit_exec_resume(void);
+__ASM_GLOBAL_FUNC( jit_exec_resume,
+                   "mov w0, #1\n\t"
+                   "bl " __ASM_NAME("pthread_jit_write_protect_np") "\n\t"
+                   "brk #0xf005" )
+#define JIT_EXEC_RESUME_TRAP ((ULONG_PTR)jit_exec_resume + 8)  /* the brk instruction */
+
+static void setup_jit_exec_resume( ucontext_t *sigcontext )
+{
+    EXCEPTION_RECORD rec = { 0 };
+    mcontext_t saved;
+
+    rec.ExceptionAddress = (void *)PC_sig(sigcontext);
+    saved = virtual_setup_exception( (void *)(SP_sig(sigcontext) & ~15), (sizeof(*saved) + 15) & ~15, &rec );
+    *saved = *sigcontext->uc_mcontext;
+    SP_sig(sigcontext) = (ULONG_PTR)saved;
+    PC_sig(sigcontext) = (ULONG_PTR)jit_exec_resume;
+}
+
+static BOOL handle_jit_exec_resume_trap( ucontext_t *sigcontext )
+{
+    if (PC_sig(sigcontext) != JIT_EXEC_RESUME_TRAP) return FALSE;
+    *sigcontext->uc_mcontext = *(mcontext_t)SP_sig(sigcontext);
+    ntdll_get_thread_data()->jit_writable = 0;
+    return TRUE;
+}
+#endif
+
+
 /***********************************************************************
  *           call_user_apc_dispatcher
  */
@@ -1126,6 +1166,13 @@ static void segv_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     else if (esr & 0x40) rec.ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
     else rec.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
     rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
+#ifdef HAVE_JIT_POOL
+    switch (virtual_handle_jit_fault( rec.ExceptionInformation[0], siginfo->si_addr ))
+    {
+    case 1: return;
+    case 2: setup_jit_exec_resume( context ); return;
+    }
+#endif
     if (!virtual_handle_fault( &rec, (void *)SP_sig(context) )) return;
     if (handle_syscall_fault( context, &rec )) return;
     setup_exception( context, &rec );
@@ -1193,6 +1240,9 @@ static void trap_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     ucontext_t *context = sigcontext;
     CONTEXT ctx;
 
+#ifdef HAVE_JIT_POOL
+    if (handle_jit_exec_resume_trap( context )) return;
+#endif
     rec.ExceptionAddress = (void *)PC_sig(context);
     save_context( &ctx, sigcontext );
 

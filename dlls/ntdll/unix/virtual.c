@@ -4709,6 +4709,43 @@ NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack )
 }
 
 
+#ifdef HAVE_JIT_POOL
+/***********************************************************************
+ *           virtual_handle_jit_fault
+ *
+ * Handle a fault on a page of the JIT pool that is writable and executable.
+ * Each thread sees such pages as either writable or executable and starts
+ * out with them executable. A write fault switches the thread to writable
+ * here; an execute fault needs the switch back, which cannot happen inside
+ * a signal handler, so the caller arranges it.
+ * Returns 0 for a fault that is not the pool's, 1 for one that was handled,
+ * 2 for one that needs the thread switched back to executable.
+ */
+int virtual_handle_jit_fault( ULONG_PTR err, void *addr )
+{
+    char *page = ROUND_ADDR( addr, host_page_mask );
+    BYTE vprot;
+    int ret = 0;
+
+    if (!is_jit_pool( page )) return 0;
+    mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
+    vprot = get_host_page_vprot( page );
+    if (is_vprot_exec_write( vprot ) && (vprot & VPROT_COMMITTED) && !(vprot & VPROT_GUARD))
+    {
+        if (err == EXCEPTION_WRITE_FAULT && !ntdll_get_thread_data()->jit_writable)
+        {
+            pthread_jit_write_protect_np( 0 );
+            ntdll_get_thread_data()->jit_writable = 1;
+            ret = 1;
+        }
+        else if (err == EXCEPTION_EXECUTE_FAULT && ntdll_get_thread_data()->jit_writable) ret = 2;
+    }
+    mutex_unlock( &virtual_mutex );
+    return ret;
+}
+#endif
+
+
 /***********************************************************************
  *           virtual_setup_exception
  */
