@@ -50,6 +50,9 @@ static inline BOOL set_ntstatus( NTSTATUS status )
     return !status;
 }
 
+/* the KUSER_SHARED_DATA page, where ntdll placed it */
+extern const struct _KUSER_SHARED_DATA *user_shared_data;
+
 /* make the kernel32 names available */
 #define HeapAlloc(heap, flags, size) RtlAllocateHeap(heap, flags, size)
 #define HeapReAlloc(heap, flags, ptr, size) RtlReAllocateHeap(heap, flags, ptr, size)

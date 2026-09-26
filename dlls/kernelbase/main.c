@@ -46,6 +46,7 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
     if (reason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls( hinst );
+        user_shared_data = __wine_get_user_shared_data();
         IsWow64Process( GetCurrentProcess(), &is_wow64 );
         init_global_data();
         init_locale( hinst );

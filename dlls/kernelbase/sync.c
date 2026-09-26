@@ -40,7 +40,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
 
 /* check if current version is NT or Win95 */
 static inline BOOL is_version_nt(void)
