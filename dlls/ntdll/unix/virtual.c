@@ -6581,20 +6581,27 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
     unsigned int res;
     SIZE_T mask = granularity_mask;
     LARGE_INTEGER offset;
+    UINT_PTR addr = (UINT_PTR)*addr_ptr;
 
     offset.QuadPart = offset_ptr ? offset_ptr->QuadPart : 0;
 
     TRACE("handle=%p process=%p addr=%p off=%s size=0x%lx alloc_type=0x%x access=0x%x\n",
           handle, process, *addr_ptr, wine_dbgstr_longlong(offset.QuadPart), *size_ptr, alloc_type, protect );
 
+#ifdef _WIN64
+    /* an address in the 32-bit address space window stands for the 32-bit address the bounds apply to */
+    if (wow64_window && addr >= (UINT_PTR)wow64_window && addr - (UINT_PTR)wow64_window < limit_4g)
+        addr -= (UINT_PTR)wow64_window;
+#endif
+
     /* Check parameters */
     if (zero_bits > 21 && zero_bits < 32)
         return STATUS_INVALID_PARAMETER_4;
 
     /* If both addr_ptr and zero_bits are passed, they have match */
-    if (zero_bits && zero_bits < 32 && ((UINT_PTR)*addr_ptr >> (32 - zero_bits)))
+    if (zero_bits && zero_bits < 32 && (addr >> (32 - zero_bits)))
         return STATUS_INVALID_PARAMETER_4;
-    if (zero_bits >= 32 && ((UINT_PTR)*addr_ptr & ~zero_bits))
+    if (zero_bits >= 32 && (addr & ~zero_bits))
         return STATUS_INVALID_PARAMETER_4;
 
     if (!is_win64 && !is_wow64())
