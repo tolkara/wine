@@ -213,9 +213,12 @@ struct syscall_frame
 
 C_ASSERT( sizeof( struct syscall_frame ) == 0x330 );
 
-static BOOL is_arm64ec_suspend_doorbell_valid(void)
+/* An emulator that runs code in this thread (ARM64EC, or FEX for a 32-bit
+ * thread under WoW64) provides a doorbell: a suspend request is left there
+ * and the thread suspends itself at a point where its state is consistent. */
+static BOOL is_suspend_doorbell_valid(void)
 {
-    return is_arm64ec() && NtCurrentTeb()->ChpeV2CpuAreaInfo && NtCurrentTeb()->ChpeV2CpuAreaInfo->SuspendDoorbell;
+    return NtCurrentTeb()->ChpeV2CpuAreaInfo && NtCurrentTeb()->ChpeV2CpuAreaInfo->SuspendDoorbell;
 }
 
 /***********************************************************************
@@ -349,7 +352,8 @@ NTSTATUS signal_set_full_context( CONTEXT *context )
     struct syscall_frame *frame = get_syscall_frame();
     NTSTATUS status = NtSetContextThread( GetCurrentThread(), context );
 
-    if (is_arm64ec_suspend_doorbell_valid() && arm64_thread_data()->suspend_pending)
+    if (is_suspend_doorbell_valid() && arm64_thread_data()->suspend_pending &&
+        !NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation && !NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback)
     {
         CONTEXT suspend_context;
         *NtCurrentTeb()->ChpeV2CpuAreaInfo->SuspendDoorbell = 0;
@@ -1414,7 +1418,7 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
     ucontext_t *ucontext = sigcontext;
     CONTEXT context;
 
-    if (is_arm64ec_suspend_doorbell_valid() &&
+    if (is_suspend_doorbell_valid() &&
         (NtCurrentTeb()->ChpeV2CpuAreaInfo->InSimulation || NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback))
     {
         *NtCurrentTeb()->ChpeV2CpuAreaInfo->SuspendDoorbell = 1;
