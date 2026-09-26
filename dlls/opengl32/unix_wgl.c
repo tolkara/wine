@@ -1846,7 +1846,7 @@ NTSTATUS wow64_get_pixel_formats( void *args )
     struct get_pixel_formats_params params =
     {
         .teb = get_teb64(params32->teb),
-        .hdc = ULongToPtr(params32->hdc),
+        .hdc = ULongToHandle(params32->hdc),
         .formats = ULongToPtr(params32->formats),
         .max_formats = params32->max_formats,
     };

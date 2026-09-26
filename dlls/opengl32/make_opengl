@@ -418,11 +418,13 @@ sub generate_unix_thunk($$$$)
             }
             elsif ($arg_type =~ /(sizei|int)ptr/)
             {
-                $call_args .= " (" . $arg_type . ")ULongToPtr(params->$pname),";
+                my $conv = $arg_type =~ /\*/ ? "ULongToPtr" : "(ULONG_PTR)";
+                $call_args .= " (" . $arg_type . ")$conv(params->$pname),";
             }
             else
             {
-                $call_args .= " ULongToPtr(params->$pname),";
+                my $conv = is_wow64_handle( $arg_type ) ? "ULongToHandle" : "ULongToPtr";
+                $call_args .= " $conv(params->$pname),";
                 $need_manual_thunk = 1 if $arg_type =~ /(\*.*\*|(sizei|int)ptr.*\*)/;
                 $need_lock = 1 if $arg_type =~ /GLsync/;
             }
@@ -480,7 +482,7 @@ sub generate_unix_thunk($$$$)
     if ($use_dc)
     {
         my $param = "params->" . get_arg_name( ${$func->[1]}[0] );
-        $param = "ULongToPtr($param)" if $is_wow64;
+        $param = "ULongToHandle($param)" if $is_wow64;
         $ret .= "    const struct opengl_funcs *funcs = get_dc_funcs( $param );\n";
         $ret .= "    if (!funcs || !funcs->p_$name) return STATUS_NOT_IMPLEMENTED;\n";
     }
@@ -582,6 +584,14 @@ sub generate_win_thunk($$)
     $ret .= "}\n";
 
     return $ret;
+}
+
+# handles and host objects travel in 32-bit pointer fields but are values,
+# never addresses in the 32-bit address space
+sub is_wow64_handle($)
+{
+    my $type = shift;
+    return $type =~ /^(HDC|HGLRC|HPBUFFERARB|GLsync|GLeglClientBufferEXT|GLeglImageOES)$/;
 }
 
 sub get_wow64_arg_type($)
