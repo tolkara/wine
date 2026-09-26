@@ -351,6 +351,12 @@ static inline int host_prot( const void *addr, int prot )
     /* an aliased pool stays executable; a page there that loses that is data for good */
     if (is_jit_pool_aliased( addr ))
         return ((prot & PROT_EXEC) || prot == PROT_NONE) ? PROT_READ | PROT_EXEC : prot;
+    /* With an aliased pool, all code the host runs is there, and executable
+     * memory elsewhere holds 32-bit code, which the emulator only reads. It
+     * never becomes executable on the host: a page that has been executable
+     * cannot be made writable again on some hosts, which breaks relocating an
+     * image or patching code later. */
+    if (jit_pool_write_offset) return prot & ~PROT_EXEC;
     /* Outside the JIT pool the kernel refuses memory that is writable and
      * executable at once. Pages are filled while writable and run once they
      * are protected read-execute, which is how images are loaded. */
