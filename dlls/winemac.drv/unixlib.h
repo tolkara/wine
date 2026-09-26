@@ -75,5 +75,9 @@ struct dnd_query_exited_params
 
 static inline void *param_ptr(UINT64 param)
 {
+#ifdef WINE_UNIX_LIB
+    /* a 32-bit caller's pointer: widen it, its address space may sit at a window */
+    if (param == (ULONG)param) return ULongToPtr(param);
+#endif
     return (void *)(UINT_PTR)param;
 }
