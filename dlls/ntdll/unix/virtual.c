@@ -2488,8 +2488,9 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         if (base && (ULONG_PTR)base < limit_4g) base = (char *)base + (ULONG_PTR)wow64_window;
         if (limit_high && limit_high < limit_4g)
         {
-            /* the lowest 64k of the 32-bit address space stay free, as on Windows */
+            /* the lowest and the highest 64k of the 32-bit address space stay free, as on Windows */
             if (limit_low < 0x10000 || limit_low >= limit_4g) limit_low = 0x10000;
+            if (limit_high > 0xfffeffff) limit_high = 0xfffeffff;
             limit_low += (ULONG_PTR)wow64_window;
             limit_high += (ULONG_PTR)wow64_window;
         }
@@ -5297,7 +5298,8 @@ void virtual_set_large_address_space(void)
     if (is_win64)
     {
         if (is_wow64())
-            user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ? limit_4g : limit_2g) - 1;
+            user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ?
+                                    limit_4g - 0x10000 : limit_2g) - 1;
 #ifndef __APPLE__  /* don't free the zerofill section on macOS */
         else if ((main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA) &&
                  (main_image_info.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
