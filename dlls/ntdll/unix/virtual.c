@@ -144,6 +144,7 @@ struct file_view
 #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
 #define VPROT_PLACEHOLDER      0x0400
 #define VPROT_FREE_PLACEHOLDER 0x0800
+#define VPROT_JIT              0x1000  /* view lives in the JIT pool */
 
 /* Conversion from VPROT_* to Win32 flags */
 static const BYTE VIRTUAL_Win32Flags[16] =
@@ -204,6 +205,10 @@ static void *working_set_limit   = (void *)0x7fff0000;
 static void *host_addr_space_limit;  /* top of the host virtual address space */
 
 static struct file_view *arm64ec_view;
+
+#ifdef HAVE_JIT_POOL
+static char *jit_pool_base, *jit_pool_end;  /* MAP_JIT memory for writable and executable views */
+#endif
 
 ULONG_PTR user_space_wow_limit = 0;
 struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
@@ -268,12 +273,52 @@ static inline BOOL is_vprot_exec_write( BYTE vprot )
     return (vprot & VPROT_EXEC) && (vprot & (VPROT_WRITE | VPROT_WRITECOPY));
 }
 
+#ifdef HAVE_JIT_POOL
+static inline BOOL is_jit_pool( const void *addr )
+{
+    return (const char *)addr >= jit_pool_base && (const char *)addr < jit_pool_end;
+}
+#endif
+
+/* the protection the host accepts for memory at the given address */
+static inline int host_prot( const void *addr, int prot )
+{
+#ifdef HAVE_JIT_POOL
+    /* Outside the JIT pool the kernel refuses memory that is writable and
+     * executable at once. Pages are filled while writable and run once they
+     * are protected read-execute, which is how images are loaded. */
+    if (!is_jit_pool( addr ) && (prot & PROT_WRITE) && (prot & PROT_EXEC)) prot &= ~PROT_EXEC;
+#endif
+    return prot;
+}
+
 /* mmap() anonymous memory at a fixed address */
 void *anon_mmap_fixed( void *start, size_t size, int prot, int flags )
 {
     assert( !((UINT_PTR)start & host_page_mask) );
     assert( !(size & host_page_mask) );
 
+#ifdef HAVE_JIT_POOL
+    if (is_jit_pool( start ))
+    {
+        /* The pool stays mapped and its pages are recycled in place. Once a
+         * page has been writable and executable the kernel refuses to lower
+         * its protection again, so it is zeroed instead, which is what a
+         * fresh mapping would give. */
+        if (!mprotect( start, size, prot )) return start;
+        if (prot == PROT_NONE)
+        {
+            mprotect( start, size, PROT_READ | PROT_WRITE );
+            memset( start, 0, size );
+            madvise( start, size, MADV_FREE_REUSABLE );
+        }
+        else if (prot != (PROT_READ | PROT_WRITE | PROT_EXEC))
+            WARN( "cannot set protection %#x on JIT pool pages %p-%p, keeping them writable and executable\n",
+                  prot, start, (char *)start + size );
+        return start;
+    }
+    prot = host_prot( start, prot );
+#endif
     return mmap( start, size, prot, MAP_PRIVATE | MAP_ANON | MAP_FIXED | flags, -1, 0 );
 }
 
@@ -282,7 +327,7 @@ void *anon_mmap_alloc( size_t size, int prot )
 {
     assert( !(size & host_page_mask) );
 
-    return mmap( NULL, size, prot, MAP_PRIVATE | MAP_ANON, -1, 0 );
+    return mmap( NULL, size, host_prot( NULL, prot ), MAP_PRIVATE | MAP_ANON, -1, 0 );
 }
 
 #ifdef USE_UFFD_WRITEWATCH
@@ -598,6 +643,7 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
 {
     void *ptr;
 
+    prot = host_prot( start, prot );
 #ifdef MAP_FIXED_NOREPLACE
     ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
 #elif defined(MAP_TRYFIXED)
@@ -1389,13 +1435,6 @@ static int get_unix_prot( BYTE vprot )
         if (vprot & VPROT_WRITECOPY) prot |= PROT_WRITE | PROT_READ;
         if (vprot & VPROT_EXEC) prot |= PROT_EXEC | PROT_READ;
         if (vprot & VPROT_WRITEWATCH) prot &= ~PROT_WRITE;
-#if defined(__APPLE__) && defined(__aarch64__)
-        /* The kernel refuses memory that is writable and executable at once.
-         * Pages are filled while writable and run once they are protected
-         * read-execute, which is how images are loaded; a program that needs
-         * both at the same time cannot get them from this host. */
-        if ((prot & PROT_WRITE) && (prot & PROT_EXEC)) prot &= ~PROT_EXEC;
-#endif
     }
     if (!prot) prot = PROT_NONE;
     return prot;
@@ -1573,6 +1612,15 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
 {
     while (start && base <= start && (char*)start + size <= (char*)end)
     {
+#ifdef HAVE_JIT_POOL
+        if ((char *)start < jit_pool_end && (char *)start + size > jit_pool_base)
+        {
+            /* the pool is kept for writable and executable views */
+            if (step > 0) start = ROUND_ADDR( jit_pool_end + step - 1, step - 1 );
+            else start = ROUND_ADDR( jit_pool_base - size, -step - 1 );
+            continue;
+        }
+#endif
         if (anon_mmap_tryfixed( start, size, unix_prot, 0 ) != MAP_FAILED) return start;
         TRACE( "Found free area is already mapped, start %p.\n", start );
         if (errno != EEXIST)
@@ -1645,6 +1693,48 @@ static void *map_free_area( void *base, void *end, size_t size, int top_down, in
 
     return start;
 }
+
+
+#ifdef HAVE_JIT_POOL
+/***********************************************************************
+ *           find_jit_pool_area
+ *
+ * Find a free area between views inside the JIT pool.
+ * virtual_mutex must be held by caller.
+ */
+static void *find_jit_pool_area( size_t size, int top_down, size_t align_mask )
+{
+    void *base = jit_pool_base, *end = jit_pool_end;
+    struct wine_rb_entry *first = find_view_inside_range( &base, &end, top_down );
+    char *start;
+
+    if (top_down)
+    {
+        start = ROUND_ADDR( (char *)end - size, align_mask );
+        while (first && start >= (char *)base)
+        {
+            struct file_view *view = WINE_RB_ENTRY_VALUE( first, struct file_view, entry );
+            if ((char *)view->base + view->size <= start) break;
+            start = ROUND_ADDR( (char *)view->base - size, align_mask );
+            first = rb_prev( first );
+        }
+        if (start < (char *)base || start + size > (char *)end) return NULL;
+    }
+    else
+    {
+        start = ROUND_ADDR( (char *)base + align_mask, align_mask );
+        while (first && start + size <= (char *)end)
+        {
+            struct file_view *view = WINE_RB_ENTRY_VALUE( first, struct file_view, entry );
+            if (start + size <= (char *)view->base) break;
+            start = ROUND_ADDR( (char *)view->base + view->size + align_mask, align_mask );
+            first = rb_next( first );
+        }
+        if (start < (char *)base || start + size > (char *)end) return NULL;
+    }
+    return start;
+}
+#endif
 
 
 /***********************************************************************
@@ -1743,6 +1833,13 @@ static void unmap_area( void *start, size_t size )
 
     if (!(size = unmap_area_above_user_limit( start, size ))) return;
 
+#ifdef HAVE_JIT_POOL
+    if (is_jit_pool( start ))
+    {
+        anon_mmap_fixed( start, size, PROT_NONE, 0 );
+        return;
+    }
+#endif
     end = (char *)start + size;
 
     LIST_FOR_EACH_ENTRY( area, &reserved_areas, struct reserved_area, entry )
@@ -1971,6 +2068,16 @@ static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image 
  */
 static inline int mprotect_exec( void *base, size_t size, int unix_prot )
 {
+#ifdef HAVE_JIT_POOL
+    if (is_jit_pool( base ))
+    {
+        /* Pages that have been writable and executable keep that protection;
+         * the page tables carry what the program asked for. */
+        if (!mprotect( base, size, unix_prot ) || errno == EACCES) return 0;
+        return -1;
+    }
+    unix_prot = host_prot( base, unix_prot );
+#endif
     if (force_exec_prot && (unix_prot & PROT_READ) && !(unix_prot & PROT_EXEC))
     {
         TRACE( "forcing exec permission on %p-%p\n", base, (char *)base + size - 1 );
@@ -2335,6 +2442,20 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
         if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
 
+#ifdef HAVE_JIT_POOL
+        if (vprot & VPROT_JIT)
+        {
+            if ((ptr = find_jit_pool_area( host_size, top_down, align_mask )) &&
+                anon_mmap_fixed( ptr, host_size, unix_prot, 0 ) == ptr)
+            {
+                TRACE( "got mem in JIT pool %p-%p\n", ptr, (char *)ptr + size );
+                goto done;
+            }
+            WARN( "JIT pool %p-%p has no room for %p bytes; the memory will not execute\n",
+                  jit_pool_base, jit_pool_end, (void *)size );
+            vprot &= ~VPROT_JIT;
+        }
+#endif
         if ((ptr = map_reserved_area( start, end, host_size, top_down, unix_prot, align_mask )))
         {
             TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
@@ -2423,7 +2544,7 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
        and if alignment is correct */
     if ((!removable || (flags & MAP_SHARED)) && host_addr == map_addr && host_size == map_size)
     {
-        if (mmap( host_addr, host_size, prot, flags, fd, offset ) != MAP_FAILED)
+        if (mmap( host_addr, host_size, host_prot( host_addr, prot ), flags, fd, offset ) != MAP_FAILED)
             return STATUS_SUCCESS;
 
         switch (errno)
@@ -3686,6 +3807,55 @@ static void *alloc_virtual_heap( SIZE_T size )
     return anon_mmap_alloc( size, PROT_READ | PROT_WRITE );
 }
 
+#ifdef HAVE_JIT_POOL
+/***********************************************************************
+ *           jit_pool_init
+ *
+ * Reserve the MAP_JIT memory that writable and executable views come from.
+ * WINEJITPOOL gives its size in megabytes, or as start-end the bounds of a
+ * region the host has already mapped for that purpose.
+ */
+static void jit_pool_init(void)
+{
+    const char *env = getenv( "WINEJITPOOL" );
+    unsigned long start, end;
+    size_t size = 0x100000000;  /* 4 GB */
+    void *ptr;
+
+    if (env && sscanf( env, "%lx-%lx", &start, &end ) == 2)
+    {
+        jit_pool_base = ROUND_ADDR( start + host_page_mask, host_page_mask );
+        jit_pool_end = ROUND_ADDR( end, host_page_mask );
+        if (jit_pool_end <= jit_pool_base || is_beyond_limit( jit_pool_base, jit_pool_end - jit_pool_base, user_space_limit ))
+        {
+            ERR( "invalid JIT pool %s\n", env );
+            jit_pool_base = jit_pool_end = NULL;
+        }
+        else TRACE( "using the host's JIT pool %p-%p\n", jit_pool_base, jit_pool_end );
+        return;
+    }
+    if (env) size = (size_t)strtoul( env, NULL, 0 ) << 20;
+    if (!size) return;
+    ptr = mmap( NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0 );
+    if (ptr == MAP_FAILED)
+    {
+        ERR( "cannot map a JIT pool of %p bytes: %s; nothing will execute what it writes\n",
+             (void *)size, strerror(errno) );
+        return;
+    }
+    if (is_beyond_limit( ptr, size, user_space_limit ))
+    {
+        ERR( "JIT pool %p-%p lies beyond the user space limit %p\n", ptr, (char *)ptr + size, user_space_limit );
+        munmap( ptr, size );
+        return;
+    }
+    jit_pool_base = ptr;
+    jit_pool_end = (char *)ptr + size;
+    TRACE( "JIT pool %p-%p\n", jit_pool_base, jit_pool_end );
+}
+#endif
+
+
 /***********************************************************************
  *           virtual_init
  */
@@ -3725,6 +3895,9 @@ void virtual_init(void)
             mmap_add_reserved_area( (*preload_info)[i].addr, (*preload_info)[i].size );
 
     mmap_init( preload_info ? *preload_info : NULL );
+#ifdef HAVE_JIT_POOL
+    jit_pool_init();
+#endif
 
     if ((preload = getenv("WINEPRELOADRESERVE")))
     {
@@ -5051,6 +5224,17 @@ static NTSTATUS allocate_virtual_memory( void **ret, SIZE_T *size_ptr, ULONG typ
             if (type & MEM_WRITE_WATCH) vprot |= VPROT_WRITEWATCH;
             if (type & MEM_RESERVE_PLACEHOLDER) vprot |= VPROT_PLACEHOLDER | VPROT_FREE_PLACEHOLDER;
             if (protect & PAGE_NOCACHE) vprot |= SEC_NOCACHE;
+#ifdef HAVE_JIT_POOL
+            /* Writable and executable memory that native code will run comes
+             * from the JIT pool: in an ARM64EC process that is memory marked
+             * as EC code, elsewhere all of it. What emulated code asks for
+             * stays ordinary memory, since the emulator never runs it. */
+            if (is_vprot_exec_write( vprot ) && jit_pool_base && !base &&
+                (!arm64ec_view || (attributes & MEM_EXTENDED_PARAMETER_EC_CODE)) &&
+                !(limit_low && (char *)limit_low >= jit_pool_end) &&
+                !(limit_high && (char *)limit_high < jit_pool_end))
+                vprot |= VPROT_JIT;
+#endif
 
             if (vprot & VPROT_WRITECOPY) status = STATUS_INVALID_PAGE_PROTECTION;
             else if (is_dos_memory) status = allocate_dos_memory( &view, vprot );

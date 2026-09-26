@@ -29,6 +29,13 @@
 #include "wine/list.h"
 #include "wine/debug.h"
 
+#if defined(__APPLE__) && defined(__aarch64__)
+/* The kernel refuses memory that is writable and executable at once, except
+ * MAP_JIT memory whose writable and executable sides each thread toggles
+ * between. Such requests are served from a pool of it; see virtual.c. */
+#define HAVE_JIT_POOL 1
+#endif
+
 struct msghdr;
 
 typedef struct
