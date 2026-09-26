@@ -349,6 +349,20 @@ BOOL is_virtual_desktop(void)
     return ret;
 }
 
+/* no other process can be started (ntdll's WINESINGLEPROCESS): no explorer
+ * process sets the desktop up, and this one loads its own display driver */
+BOOL is_single_process(void)
+{
+    static int single_process = -1;
+
+    if (single_process == -1)
+    {
+        const char *env = getenv( "WINESINGLEPROCESS" );
+        single_process = env && atoi( env );
+    }
+    return single_process;
+}
+
 BOOL is_service_process(void)
 {
     static const WCHAR wine_service_station_name[] = {'_','_','w','i','n','e','s','e','r','v','i','c','e','_','w','i','n','s','t','a','t','i','o','n',0};
@@ -809,7 +823,7 @@ HWND get_desktop_window(void)
     }
     SERVER_END_REQ;
 
-    if (!thread_info->top_window)
+    if (!thread_info->top_window && !is_single_process())
     {
         static const WCHAR appnameW[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s',
             '\\','s','y','s','t','e','m','3','2','\\','e','x','p','l','o','r','e','r','.','e','x','e',0};
@@ -879,7 +893,10 @@ HWND get_desktop_window(void)
             NtClose( process );
         }
         else ERR_(win)( "failed to start explorer %x\n", status );
+    }
 
+    if (!thread_info->top_window)
+    {
         SERVER_START_REQ( get_desktop_window )
         {
             req->force = 1;

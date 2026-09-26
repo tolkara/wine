@@ -242,6 +242,7 @@ extern NTSTATUS get_shared_input( UINT tid, struct object_lock *lock, const inpu
 
 extern BOOL is_virtual_desktop(void);
 extern BOOL is_service_process(void);
+extern BOOL is_single_process(void);
 
 /* window.c */
 struct tagWND;

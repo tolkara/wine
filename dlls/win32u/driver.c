@@ -931,6 +931,53 @@ static const WCHAR guid_key_prefixW[] =
 };
 static const WCHAR guid_key_suffixW[] = {'}','\\','0','0','0','0'};
 
+/* single-process mode: no explorer process names the driver, so load the
+ * one the configuration asks for, as explorer would */
+static BOOL load_driver_in_process(void)
+{
+    static const WCHAR default_drivers[] = {'m','a','c',',','x','1','1',',','w','a','y','l','a','n','d',0};
+    static const WCHAR nullW[] = {'n','u','l','l',0};
+    static const WCHAR prefixW[] = {'w','i','n','e'}, suffixW[] = {'.','d','r','v',0};
+    WCHAR buffer[MAX_PATH], libname[64], *name = buffer, *next;
+    char buf[4096];
+    KEY_VALUE_PARTIAL_INFORMATION *info = (void *)buf;
+    HKEY hkey;
+    ULONG size;
+
+    memcpy( buffer, default_drivers, sizeof(default_drivers) );
+    /* @@ Wine registry key: HKCU\Software\Wine\Drivers */
+    if ((hkey = reg_open_hkcu_key( "Software\\Wine\\Drivers" )))
+    {
+        if ((size = query_reg_ascii_value( hkey, "Graphics", info, sizeof(buf) )) && info->Type == REG_SZ &&
+            size < sizeof(buffer))
+        {
+            memcpy( buffer, info->Data, size );
+            buffer[size / sizeof(WCHAR)] = 0;
+        }
+        NtClose( hkey );
+    }
+    for (; name && *name; name = next)
+    {
+        void *ret_ptr;
+        ULONG ret_len, len;
+
+        if ((next = wcschr( name, ',' ))) *next++ = 0;
+        if (!wcscmp( name, nullW ))
+        {
+            __wine_set_user_driver( &null_user_driver, WINE_GDI_DRIVER_VERSION );
+            return TRUE;
+        }
+        if ((len = lstrlenW( name )) + ARRAY_SIZE(prefixW) + ARRAY_SIZE(suffixW) > ARRAY_SIZE(libname)) continue;
+        memcpy( libname, prefixW, sizeof(prefixW) );
+        memcpy( libname + ARRAY_SIZE(prefixW), name, len * sizeof(WCHAR) );
+        memcpy( libname + ARRAY_SIZE(prefixW) + len, suffixW, sizeof(suffixW) );
+        TRACE( "trying driver %s\n", debugstr_w(libname) );
+        if (!KeUserModeCallback( NtUserLoadDriver, libname, (lstrlenW( libname ) + 1) * sizeof(WCHAR),
+                                 &ret_ptr, &ret_len )) return TRUE;
+    }
+    return FALSE;
+}
+
 static BOOL load_desktop_driver( HWND hwnd )
 {
     static const WCHAR guid_nullW[] = {'0','0','0','0','0','0','0','0','-','0','0','0','0','-','0','0','0','0','-',
@@ -949,6 +996,8 @@ static BOOL load_desktop_driver( HWND hwnd )
          '_','g','u','i','d',0};
 
     user_check_not_lock();
+
+    if (is_single_process()) return load_driver_in_process();
 
     asciiz_to_unicode( driver_load_error, "The explorer process failed to start." );  /* default error */
     /* wait for graphics driver to be ready */
