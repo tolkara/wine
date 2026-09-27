@@ -146,9 +146,10 @@ static inline NSUInteger adjusted_modifiers_for_settings(NSUInteger modifiers)
     if (modifiers & NX_DEVICERALTKEYMASK)
         new_modifiers |= right_option_is_alt ? NX_DEVICERCMDKEYMASK : NX_DEVICERALTKEYMASK;
 
-    if (modifiers & NX_DEVICELCMDKEYMASK)
+    // A Command key that is ignored reaches Windows as nothing at all.
+    if ((modifiers & NX_DEVICELCMDKEYMASK) && !left_command_is_ignored)
         new_modifiers |= left_command_is_ctrl ? NX_DEVICELCTLKEYMASK : NX_DEVICELCMDKEYMASK;
-    if (modifiers & NX_DEVICERCMDKEYMASK)
+    if ((modifiers & NX_DEVICERCMDKEYMASK) && !right_command_is_ignored)
         new_modifiers |= right_command_is_ctrl ? NX_DEVICERCTLKEYMASK : NX_DEVICERCMDKEYMASK;
 
     fix_generic_modifiers_by_device(&new_modifiers);

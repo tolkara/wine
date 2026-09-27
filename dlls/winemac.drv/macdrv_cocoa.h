@@ -105,6 +105,8 @@ extern int left_option_is_alt;
 extern int right_option_is_alt;
 extern int left_command_is_ctrl;
 extern int right_command_is_ctrl;
+extern int left_command_is_ignored;
+extern int right_command_is_ignored;
 extern int allow_immovable_windows;
 extern int use_confinement_cursor_clipping;
 extern int cursor_clipping_locks_windows;
